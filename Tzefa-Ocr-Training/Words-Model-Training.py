@@ -118,7 +118,7 @@ if __name__ == '__main__':
     @dataclass(frozen=True)
     class TrainingConfig:
         BATCH_SIZE: int = 8
-        EPOCHS: int = 5
+        EPOCHS: int = 7
         LEARNING_RATE: float = 0.00005
 
 
@@ -129,7 +129,8 @@ if __name__ == '__main__':
 
     @dataclass(frozen=True)
     class ModelConfig:
-        MODEL_NAME: str = "C:\Storage\Models\checkpoint-400"
+
+        MODEL_NAME: str = "C:\Storage\Models\checkpoint-1200"
 
 
 
@@ -181,7 +182,7 @@ if __name__ == '__main__':
         output_dir='C:\Storage\Models',
         logging_strategy='steps',
         save_strategy='steps',
-        save_steps=100,
+        save_steps=9000,
         save_total_limit=5,
         report_to='tensorboard',
         num_train_epochs=TrainingConfig.EPOCHS

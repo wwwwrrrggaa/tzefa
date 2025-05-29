@@ -440,16 +440,16 @@ def insert_image_to_folder(image_value: str, image: cv2.Mat, save_folder_path: s
                            added_words: dict):
     if (image_value in added_words):
         added_words[image_value] += 1
-        filepath = save_folder_path + image_value + "\\" + "Imgur_5k_" + str(added_words[image_value]) + ".jpg"
+        filepath = save_folder_path + image_value + "\\" + "Imgur_5k_3_" + str(added_words[image_value]) + ".jpg"
 
     elif (image_value in exisiting_words):
         added_words[image_value] = 1
-        filepath = save_folder_path + image_value + "\\" + "Imgur_5k_" + str(added_words[image_value]) + ".jpg"
+        filepath = save_folder_path + image_value + "\\" + "Imgur_5k_3_" + str(added_words[image_value]) + ".jpg"
 
     else:
         added_words[image_value] = 1
         os.mkdir(save_folder_path + image_value)
-        filepath = save_folder_path + image_value + "\\" + "Imgur_5k_" + str(added_words[image_value]) + ".jpg"
+        filepath = save_folder_path + image_value + "\\" + "Imgur_5k_3_" + str(added_words[image_value]) + ".jpg"
     cv2.imwrite(filepath, image)
 
 
@@ -545,9 +545,9 @@ if __name__ == '__main__':
     save_folder_path = r"C:\DataSets\Words\\"
     existing_words = getfolderdict(save_folder_path)
     added_words = {}
-    extract_Imgur5K_dataset(r"C:\Users\yonat\Downloads\archive\IMGUR5K_val\\",save_folder_path,existing_words)
+    extract_Imgur5K_dataset(r"C:\Users\yonat\Downloads\archive\IMGUR5K_train\\",save_folder_path,existing_words)
 
-    #simplifyfolder(save_folder_path)
+    simplifyfolder(save_folder_path)
     # extract_Text_ocr_dataset(r"C:\Users\yonat\Downloads\train_val_images\train_images",r"C:\Users\yonat\Downloads\TextOCR_0.1_train.json",save_folder_path)
 
     # simplifyfolder(path)

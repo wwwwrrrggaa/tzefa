@@ -3,7 +3,7 @@ import requests
 from PIL import Image
 
 processor = TrOCRProcessor.from_pretrained("microsoft/trocr-small-stage1")
-model = VisionEncoderDecoderModel.from_pretrained("C:\Storage\Models\checkpoint-1052300")
+model = VisionEncoderDecoderModel.from_pretrained("C:\Storage\Models\checkpoint-909000")
 def ocr(image):
     pixel_values = processor(image, return_tensors="pt").pixel_values
     generated_ids = model.generate(pixel_values)
@@ -12,4 +12,4 @@ def ocr(image):
     return generated_text
 
 if __name__ == '__main__':
-    print(ocr(Image.open(r"C:\DataSets\Words\kYXosdQEIbxOznnvHHjV\genbatch2-number1.jpg"))) # Replace 'image.jpg' with your image file path
+    print(ocr(Image.open(r"C:\DataSets\Words\kYXosdQEIbxOznnvHHjV\genbatch2-number1.jpg"))) # Replace 'image.jpg' with your image file pathz
