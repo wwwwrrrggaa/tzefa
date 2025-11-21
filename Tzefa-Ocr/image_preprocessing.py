@@ -1,6 +1,13 @@
 import cv2
 import numpy as np
 from PIL import Image
+from paddleocr import TextImageUnwarping ,PaddleOCR
+paddle_detector = PaddleOCR(use_angle_cls=False, lang='en')
+
+def UV_unwrap(image):
+    model = TextImageUnwarping(model_name="UVDoc")
+    output = model.predict(image, batch_size=1)
+    return output[0].img['res']
 
 
 def find_colors(image):
@@ -95,7 +102,7 @@ def segment_lines(binary_image):
     # Compute statistical thresholds
     mean_proj = np.mean(horizontal_projection)
     std_proj = np.std(horizontal_projection)
-    threshold = mean_proj + 1 * std_proj  # Adjust multiplier as needed
+    threshold = mean_proj + 1.5* std_proj  # Adjust multiplier as needed
 
     line_bboxes = []
     in_line = False
@@ -116,6 +123,20 @@ def segment_lines(binary_image):
         line_bboxes.append((0, start_y, width, height - start_y))
 
     return line_bboxes
+
+
+def segment_lines_paddle(image_input, detector=paddle_detector):
+    img = image_input
+    if img.ndim == 2:
+        img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)
+    result = detector.ocr(img, rec=False)
+    line_bboxes = []
+    for entry in result[0]:
+        points = np.asarray(entry[0], dtype=np.int32)
+        x, y, w, h = cv2.boundingRect(points)
+        line_bboxes.append((x, y, w, h))
+    return sorted(line_bboxes, key=lambda box: box[1])
+
 
 
 
@@ -235,17 +256,4 @@ def linestowords(binarified_img, line_bboxes):
 
     return words
 
-def ocr_word(bbox, binarified_img):
-    """Filler function for OCR of words. Crops the word from binarified_img using bbox and returns placeholder text."""
-    x, y, w, h = bbox
-    word_img = binarified_img.crop((x, y, x + w, y + h))
-    # Placeholder: return dummy text. Replace with actual OCR model later.
-    return "WORD"
 
-
-def ocr_number(bbox, binarified_img):
-    """Filler function for OCR of numbers. Crops the number from binarified_img using bbox and returns placeholder text."""
-    x, y, w, h = bbox
-    number_img = binarified_img.crop((x, y, x + w, y + h))
-    # Placeholder: return dummy text. Replace with actual OCR model later.
-    return "NUMBER"

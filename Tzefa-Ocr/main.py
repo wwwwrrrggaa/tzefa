@@ -1,56 +1,94 @@
+import PIL
 import cv2
 from PIL import Image, ImageFilter, ImageOps
 import image_preprocessing
 import sys
 from pathlib import Path
 import numpy as np
+import OCR
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from Tzefa_Language import ErrorCorrection as ErrorCorrection
+from Tzefa_Language import topy as topy
+
 
 
 def image_to_code(img):
     global binarified_img, Truelines, saveimg, listoftruth
-    binarified_img = image_preprocessing.binarize_with_colors(img,image_preprocessing.find_colors(img),'whatever')
-    Truelines = image_preprocessing.segment_lines(binarified_img)
-    print(Truelines)
-    binarified_img = Image.fromarray(binarified_img)  # Convert NumPy array to PIL Image
+    from PIL import ImageDraw
+
+    binarified_img = image_preprocessing.binarize_with_colors(img, image_preprocessing.find_colors(img), 'whatever')
+    img = PIL.Image.fromarray(img)
+    Truelines = image_preprocessing.segment_lines_paddle(binarified_img)
+    binarified_img = Image.fromarray(binarified_img)
+    binarified_img.show()
+
+    # create a copy of the original PIL image to draw bounding boxes on
+    boxed_img = img.copy()
+    draw = ImageDraw.Draw(boxed_img)
+
     words = image_preprocessing.linestowords(binarified_img, Truelines)
-    print(words)
+
+
     # Translate word bounding boxes into correct readings using error correction
     corrected_lines = []
-    for line_num, word_dict in words.items():
-        line_bbox = Truelines[line_num - 1]  # Line numbers start at 1, list at 0
-        x, y, w, h = line_bbox
-        line_text = []
-        for word_num, word_pos in word_dict.items():
-            word_x1, word_x2 = word_pos
+    ErrorCorrection.sendlines(len(Truelines))
+    index_list = []
+    for line_number in words:
+
+        for word_number in words[line_number]:
+            line_bbox = Truelines[line_number - 1]  # Line numbers start at 1, list at 0
+            x, y, w, h = line_bbox
+            word_x1, word_x2 = words[line_number][word_number]
             word_y1, word_y2 = y, y + h
-            word_bbox = (x + word_x1, word_y1, word_x2 - word_x1, word_y2 - word_y1)
-            # First, OCR as word to get initial text
-            ocr_text = image_preprocessing.ocr_word(word_bbox, binarified_img)
-            # Classify based on error correction to decide if it's a word or number
-            type_ = ErrorCorrection.classify_word(ocr_text)
-            if type_ == 'number':
-                # Re-OCR as number if classified as such
-                ocr_text = image_preprocessing.ocr_number(word_bbox, binarified_img)
-            # Apply error correction to the appropriate list
-            if type_ == 'word':
-                corrected_text = ErrorCorrection.findword(ErrorCorrection.listezfunc, ocr_text)[0]
+
+            # compute crop bbox (keep original behavior but fix absolute x2)
+            word_bbox = (x + word_x1, word_y1 - 20, x + word_x2, word_y2 + 20)
+            # clamp coordinates to image bounds
+            img_w, img_h = boxed_img.size
+            x1 = max(0, int(word_bbox[0]))
+            y1 = max(0, int(word_bbox[1]))
+            x2 = min(img_w, int(word_bbox[2]))
+            y2 = min(img_h, int(word_bbox[3]))
+
+            # draw rectangle for this word
+            draw.rectangle([x1, y1, x2, y2], outline='red', width=2)
+
+            cropped_img = img.crop((x1, y1, x2, y2))
+
+            if (word_number == 1):
+                recognized_text = OCR.ocr_word(cropped_img)
+                firstword, index, numflag = ErrorCorrection.handelfirstword(recognized_text)
+                index_list.append(index)
+                text_line = firstword
             else:
-                corrected_text = ErrorCorrection.findword(ErrorCorrection.listintegers, ocr_text)[0]
-            line_text.append(corrected_text)
-        corrected_lines.append(" ".join(line_text))
-    return corrected_lines
+                if numflag == 1 and word_number == 3:
+                    recognized_text = OCR.ocr_number(cropped_img)
+                    text_line += " " + recognized_text
+                else:
+                    recognized_text = OCR.ocr_word(cropped_img)
+                    text_line += " " + recognized_text
+        corrected_lines.append(text_line)
+
+    # show the image with bounding boxes
+    boxed_img.show()
+
+    print(corrected_lines)
+    linelist = [ErrorCorrection.toline(corrected_lines[i], index_list[i], ErrorCorrection.giveindents()) for i in range(len(corrected_lines))]
+    print(linelist)
+    listfunctions, listezfunctions = ErrorCorrection.giveinstructions()
+    topy.getinstructions(listfunctions, listezfunctions)
+    topy.makepyfile(linelist)
+    from Tzefa_Language import test
+
+
+
 
 
 def main():
-    listoftruth = []
-    img = cv2.imread(r"D:\downloads\Test2.jpg")
-    stre = ""
+    img=image_preprocessing.UV_unwrap(r"D:\downloads\Test2.jpg")
     result = image_to_code(img)
-    print("Corrected lines:", result)
 
 if __name__ == '__main__':
     main()
