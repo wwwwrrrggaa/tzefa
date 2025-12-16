@@ -1,0 +1,23 @@
+# Ignore everything
+*
+
+# Unignore directories
+!*/
+
+# Ignore specific folders at root
+/Tzefa_Datasets/
+/Tzefa_Models/
+/.venv/
+/.idea/
+/__pycache__/
+/.vs/
+/.vscode/
+/.pytest_cache/
+
+# Unignore files
+!*.py
+!*.md
+!*.toml
+!requirements.txt
+!.gitignore
+

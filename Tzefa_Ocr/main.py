@@ -1,3 +1,4 @@
+
 import PIL
 import cv2
 from PIL import Image, ImageFilter, ImageOps
@@ -18,18 +19,18 @@ def image_to_code(img):
     global binarified_img, Truelines, saveimg, listoftruth
     from PIL import ImageDraw
 
-    binarified_img = image_preprocessing.binarize_with_colors(img, image_preprocessing.find_colors(img), 'whatever')
-    img = PIL.Image.fromarray(img)
-    Truelines = image_preprocessing.segment_lines_paddle(binarified_img)
+    binarified_img = image_preprocessing.sbb_binarize(img)
+    Truelines = image_preprocessing.segment_lines_surya(img)
     binarified_img = Image.fromarray(binarified_img)
     binarified_img.show()
 
     # create a copy of the original PIL image to draw bounding boxes on
-    boxed_img = img.copy()
+    boxed_img = Image.fromarray(img).copy()
+    img=Image.fromarray(img)
     draw = ImageDraw.Draw(boxed_img)
 
     words = image_preprocessing.linestowords(binarified_img, Truelines)
-
+    print(words)
 
     # Translate word bounding boxes into correct readings using error correction
     corrected_lines = []
@@ -56,6 +57,7 @@ def image_to_code(img):
             draw.rectangle([x1, y1, x2, y2], outline='red', width=2)
 
             cropped_img = img.crop((x1, y1, x2, y2))
+            cropped_img.show("ww")
 
             if (word_number == 1):
                 recognized_text = OCR.ocr_word(cropped_img)
@@ -69,6 +71,7 @@ def image_to_code(img):
                 else:
                     recognized_text = OCR.ocr_word(cropped_img)
                     text_line += " " + recognized_text
+            print(recognized_text)
         corrected_lines.append(text_line)
 
     # show the image with bounding boxes
@@ -87,7 +90,7 @@ def image_to_code(img):
 
 
 def main():
-    img=image_preprocessing.UV_unwrap(r"D:\downloads\Test2.jpg")
+    img=image_preprocessing.UV_unwrap(r"E:\Storage\tests\test2.png")
     result = image_to_code(img)
 
 if __name__ == '__main__':

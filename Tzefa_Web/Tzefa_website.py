@@ -6,7 +6,7 @@ import os
 from pathlib import Path
 
 # Add paths to import Tzefa-OCR modules
-sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'Tzefa-Ocr'))
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'Tzefa_Ocr'))
 
 from main import image_to_code
 

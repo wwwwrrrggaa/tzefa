@@ -1,6 +1,6 @@
 from fast_edit_distance import edit_distance
 
-from . import Number2Name
+from Tzefa_Language import Number2Name
 
 
 def giveinstructions():
