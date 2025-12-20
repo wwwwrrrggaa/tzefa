@@ -46,7 +46,7 @@ The broader vision for Tzefa includes:
 *   A complete end-to-end system for executing handwritten code from images.
 *   An OCR system specifically optimized for Tzefa code syntax.
 *   A runtime environment for the Tzefa language.
-*   Solutions aimed at educational tools for learning programming through handwritten code(Automatic test checking,Executing code from white board at class,Data visualization tools and more) .
+*   Solutions aimed at educational tools for learning programming through handwritten code(Automatic test checking,Executing code from white board at class,Data visualization tools,Llm debugger,Ipad Ide,and more) .
 
 ## Getting Started
 

@@ -1,71 +1,61 @@
-# python
-from pathlib import Path
-import shutil
 import os
+import lmdb
+import cv2
+import pickle
+import numpy as np
+from tqdm import tqdm
 
-def add_pair_to_dataset(image_path: str, mask_path: str, out_dir: str, pad: int = 8) -> tuple:
-    """
-    Add one image+mask pair to a growing dataset.
+# --- CONFIGURATION ---
+SOURCE_DIR = r"C:\dev\projects\PycharmProjects\tzefa\Tzefa_Datasets\Binarization\Unified_Batch"
+OUTPUT_LMDB = r"C:\dev\projects\PycharmProjects\tzefa\Tzefa_Datasets\Binarization\Unified_LMDB"
+MAP_SIZE = 10995116277  # 1TB (Virtual map size, doesn't take actual space)
 
-    - image_path, mask_path: source file paths (strings or Path-like)
-    - out_dir: dataset root directory (will contain `images/`, `masks/`, and `next_index.txt`)
-    - pad: zero padding width for filenames (default 8 -> 00000001)
+def create_lmdb():
+    img_dir = os.path.join(SOURCE_DIR, "images")
+    msk_dir = os.path.join(SOURCE_DIR, "masks")
 
-    Returns: (new_image_path, new_mask_path) as Path objects.
-    """
-    out = Path(out_dir)
-    imgs_dir = out / "images"
-    masks_dir = out / "masks"
-    index_file = out / "next_index.txt"
+    if not os.path.exists(img_dir):
+        print(f"Error: Source not found at {img_dir}")
+        return
 
-    imgs_dir.mkdir(parents=True, exist_ok=True)
-    masks_dir.mkdir(parents=True, exist_ok=True)
+    # Get file pairs
+    images = sorted([f for f in os.listdir(img_dir) if f.endswith(('.png', '.jpg', '.jpeg'))])
+    print(f"Found {len(images)} images. Packing into LMDB...")
 
-    # read or create next index
-    if index_file.exists():
-        try:
-            idx = int(index_file.read_text().strip())
-        except Exception:
-            idx = 0
-    else:
-        idx = 0
+    # Open LMDB environment
+    # map_size must be larger than expected DB size. Windows requires this to be explicit.
+    env = lmdb.open(OUTPUT_LMDB, map_size=MAP_SIZE)
 
-    # compute target names
-    img_src = Path(image_path)
-    mask_src = Path(mask_path)
-    if not img_src.exists():
-        raise FileNotFoundError(f"Image not found: {img_src}")
-    if not mask_src.exists():
-        raise FileNotFoundError(f"Mask not found: {mask_src}")
+    # Write to DB
+    with env.begin(write=True) as txn:
+        # Save dataset length
+        txn.put("length".encode("ascii"), str(len(images)).encode("ascii"))
 
-    img_ext = img_src.suffix or ".jpg"
-    mask_ext = mask_src.suffix or ".png"
+        for idx, img_name in enumerate(tqdm(images)):
+            # Determine mask name (Unified Processor uses same stem + .png)
+            base_name = os.path.splitext(img_name)[0]
+            mask_name = base_name + ".png"
 
-    base_name = f"{idx:0{pad}d}"
-    new_img = imgs_dir / (base_name + img_ext)
-    new_mask = masks_dir / (base_name + mask_ext)
+            img_path = os.path.join(img_dir, img_name)
+            msk_path = os.path.join(msk_dir, mask_name)
 
-    # avoid overwriting accidentally: if file exists, increment until free
-    while new_img.exists() or new_mask.exists():
-        idx += 1
-        base_name = f"{idx:0{pad}d}"
-        new_img = imgs_dir / (base_name + img_ext)
-        new_mask = masks_dir / (base_name + mask_ext)
+            # Read Raw Bytes (We don't decode here, we store compressed bytes to save space)
+            with open(img_path, 'rb') as f:
+                img_bytes = f.read()
 
-    # copy files
-    shutil.copy2(img_src, new_img)
-    shutil.copy2(mask_src, new_mask)
+            with open(msk_path, 'rb') as f:
+                msk_bytes = f.read()
 
-    # write next index (next free)
-    next_idx = idx + 1
-    index_file.write_text(str(next_idx))
+            # Keys: image_0, mask_0, image_1, mask_1...
+            txn.put(f"image_{idx}".encode("ascii"), img_bytes)
+            txn.put(f"mask_{idx}".encode("ascii"), msk_bytes)
 
-    return new_img, new_mask
+            # Commit every 1000 images to ensure safety
+            if idx % 1000 == 0:
+                pass # txn autocommits at end of context, but for huge sets manual commit helps RAM
 
-def unpack_Restomer(dir_path,write_path):
-    dir_names=["train","test","valid"]
-    for dir_name in dir_names:
-        path=os.join(dir_path,dir_name)
+    env.close()
+    print(f"\nSuccess! LMDB created at: {OUTPUT_LMDB}")
 
-if __name__ == '__main__':
-    unpack_Restomer(r"/Tzefa_Datasets\temp\Restomer_data", r"/Tzefa_Datasets\Binarization")
+if __name__ == "__main__":
+    create_lmdb()
