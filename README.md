@@ -1,4 +1,5 @@
 # Tzefa: Programming Language & OCR System
+I didnt write the readme its just a filler for now 
 
 Tzefa is an innovative project that combines a custom-designed programming language with an Optical Character Recognition (OCR) system. This allows users to write Tzefa code, capture it as an image, and then have the system recognize, interpret, and execute the code. The project also includes tools for training the OCR models and a graphical user interface (GUI) for a more interactive experience.
 
