@@ -1,4 +1,6 @@
 # Tzefa Project
+<img width="2712" height="1207" alt="image" src="https://github.com/user-attachments/assets/1b5675d9-40a7-4a17-9e5d-e593251b0dd4" />
+
 
 Tzefa is a multi-component project aimed at creating an integrated system for extracting code from images using Optical Character Recognition (OCR), interpreting this code via a custom programming language ("Tzefa"), and providing tools for image processing and model training.
 
