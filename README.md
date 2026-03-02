@@ -81,7 +81,6 @@ Each view is toggled via buttons. If the pipeline crashes at any stage, all prio
 
 ### Needs Work
 - ⚠️ **Line Segmentation model** is the weakest link — detection accuracy requires X-axis padding compensation due to 640×640 squash. Needs more training data and/or architectural improvements.
-- ⚠️ **Number model** is incomplete (no weights in `Tzefa_Models/number_model/`)
 - ⚠️ **ErrorCorrection + topy global state** requires `importlib.reload()` between runs
 - ⚠️ **createdpython.py** has 3 error-handler call-site bugs (wrong arg counts)
 

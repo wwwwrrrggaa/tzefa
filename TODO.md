@@ -31,9 +31,6 @@ The YOLO-OBB line segmentation model is the primary bottleneck. The current work
 - [ ] **Evaluate letterboxing** — train with aspect-ratio-preserving letterbox instead of squash, so detection widths are accurate without padding hacks
 - [ ] **Cache the YOLO model** — currently reloaded from disk for every image (`load_model()` called in `segment_lines()`)
 
-### Number Model
-- [ ] Complete training and add weights to `Tzefa_Models/number_model/`
-- [ ] Wire back into `OCR.py` as a lazy-loaded second model
 
 ### Add `.gitignore`
 - [ ] Exclude: `__pycache__/`, `uploads/`, `*.pyc`, `Tzefa_Models/` (multi-GB weights), `Tzefa_Datasets/`, `*.prof`
@@ -69,6 +66,28 @@ The YOLO-OBB line segmentation model is the primary bottleneck. The current work
 ### OCR Pipeline
 - [ ] Batch word OCR inference (currently one word at a time)
 - [ ] Add custom Levenshtein with weighted OCR confusion pairs (l/I, O/0, S/5, etc.) — `ocr_edit_distance` exists in ErrorCorrection.py but isn't used
+
+---
+
+## Future Vision
+
+### Language Evolution
+- [ ] **4-word syntax** — expand instruction format from `COMMAND ARG1 ARG2` to `COMMAND ARG1 ARG2 ARG3` for richer expressions
+- [ ] **Lowercase support** — allow lowercase characters in the language and update compiler, OCR, and error correction accordingly
+
+### Automated Testing / Education Platform
+- [ ] **Teacher API** — Python API where a teacher defines a problem: predefined input variables the student receives, expected output, and test cases
+- [ ] **Test runner** — automatically runs student's handwritten code against the test suite and reports pass/fail per test case
+- [ ] **Classroom integration** — batch processing of student submissions with grading output
+
+### iPad / Smart Pen IDE
+- [ ] **Real-time recognition** — stream handwriting from iPad or smart pen directly into the OCR pipeline
+- [ ] **Live feedback** — show error correction suggestions as the student writes
+- [ ] **Hybrid IDE** — combine handwriting input with a code editor for corrections
+
+### Data Visualization & LLM Debugging
+- [ ] **Data visualization libraries** — add plotting/charting support to the Tzefa language (e.g. bar charts, line graphs for teaching data concepts)
+- [ ] **LLM-powered debugging** — give an LLM context from inside the VM (variable state, execution trace, error messages) to provide natural language debugging hints to students
 
 ---
 
