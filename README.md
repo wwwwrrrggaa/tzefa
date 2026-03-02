@@ -1,53 +1,122 @@
-# Tzefa Project
+# Tzefa
 
-Tzefa is a multi-component project aimed at creating an integrated system for extracting code from images using Optical Character Recognition (OCR), interpreting this code via a custom programming language ("Tzefa"), and providing tools for image processing and model training.
+**Tzefa** is an end-to-end system that photographs handwritten code on a whiteboard, recognizes it via a custom OCR pipeline, compiles it through a custom programming language, and executes it — all from a single image upload in a self-hosted web UI.
 
-## Core Components
+---
 
-The project is organized into the following main modules:
+## Pipeline
 
-*   **`Tzefa_Ocr/`**:
-    *   Handles the OCR inference pipeline.
-    *   **Current State**: Uses `PaddleOCR` for unwarping and `Sauvola` binarization (`image_preprocessing.py`).
-    *   **Future State**: Transitioning to custom Deep Learning models for:
-        *   **Binarization**: Cleaning and preparing document images (replacing `sbb_binarize`).
-        *   **Line Segmentation**: Detecting and isolating lines of code.
-        *   **Text Recognition**: Transformer-based models (TrOCR) for recognizing text (`OCR.py`).
+```
+Image Upload (Flask web UI)
+    │
+    ├─ Stage 1: Binarization ──────── HighResMAnet (mit_b5), tiled 640×640, custom trained
+    ├─ Stage 2: Line Segmentation ─── YOLO-OBB XL, resize to 640×640, custom trained
+    ├─ Stage 3: Word Segmentation ─── Morphological dilation (repeated small kernel → 3 components)
+    ├─ Stage 4: Word OCR ──────────── Fine-tuned TrOCR (custom trained word model)
+    ├─ Stage 5: Error Correction ──── Edit distance matching against Tzefa vocabulary
+    ├─ Stage 6: Compilation ───────── Tzefa instructions → Python code generation
+    └─ Stage 7: Execution ─────────── Subprocess with 15s timeout, captures stdout
+```
 
-*   **`Tzefa_Ocr_Training/`**:
-    *   Contains training scripts and dataset generators for the OCR pipeline.
-    *   **Binarization**: `Binarization/` contains `Model.py`, `Training.py`, and `Data.py` for the new custom cleaning model.
-    *   **Line-Segementation**: Placeholder for future segmentation model development.
-    *   **Word/Number Models**: Tools for generating synthetic data and training recognition models (`Words-Dataset-Generator.py`, `Numbers-Dataset-Generator.py`).
+All three DL models (Binarization, Line Segmentation, Word OCR) are custom trained. No stock/pretrained models in the inference path.
 
-*   **`Tzefa_Language/`**:
-    *   Implements the "Tzefa" custom programming language.
-    *   **Compiler**: `topy.py` translates Tzefa instructions (e.g., `MAKEINTEGER`, `NEWLIST`) into executable Python code.
-    *   **Error Correction**: `ErrorCorrection.py` uses `fast_edit_distance` to correct OCR errors based on defined language grammar (`listfunctions`).
-    *   **Planned Features**:
-        *   **Immediate Types**: shifting from digits to words (e.g., "SEVENTEEN") to maximize error correction coverage.
-        *   **Custom Levenshtein**: Weighted distance metrics to handle specific OCR confusions (e.g., 'l' vs 'I').
-        *   **Usability**: Support for lowercase and simplified function names.
-    *   Key files: `main.py` (entry point), `topy.py`, `ErrorCorrection.py`.
+---
 
-*   **`Tzefa_Web/`**:
-    *   A Flask-based web application (`app.py`) that provides a user interface for:
-        *   Uploading images.
-        *   Performing OCR (currently using `Tzefa_Ocr` pipeline).
-        *   Displaying results.
-    *   **Server Interface**: Plans to expose a dedicated API/Server interface.
+## Project Structure
 
-*   **`Tzefa_Datasets/`** & **`Tzefa_Models/`**:
-    *   Directories for managing datasets (images, masks) and storing trained model checkpoints.
+| Directory | Purpose |
+|-----------|---------|
+| `Tzefa_Ocr/` | Inference pipeline: binarization, line/word segmentation, OCR, pipeline orchestration |
+| `Tzefa_Language/` | Tzefa programming language: compiler (`topy.py`), error correction, VM runtime (`createdpython.py`) |
+| `Tzefa_Web/` | Flask web server + HTML template with toggle views for every pipeline stage |
+| `Tzefa_Ocr_Training/` | Training scripts and dataset generators for all models |
+| `Tzefa_Models/` | Trained model checkpoints (Binarization, Line Segmentation, Word Model) |
+| `Tzefa_Datasets/` | Training datasets (Binarization, Line Segmentation) |
 
-## Overall Goal
+### Key Files
 
-The broader vision for Tzefa includes:
-*   A complete end-to-end system for executing handwritten code from images.
-*   An OCR system specifically optimized for Tzefa code syntax.
-*   A runtime environment for the Tzefa language.
-*   Solutions aimed at educational tools for learning programming through handwritten code(Automatic test checking,Executing code from white board at class,Data visualization tools,Llm debugger,Ipad Ide,and more) .
+| File | Role |
+|------|------|
+| `Tzefa_Ocr/main.py` | Pipeline orchestrator — 7 stages with crash isolation |
+| `Tzefa_Ocr/Binarization.py` | HighResMAnet (mit_b5) with high-res stem, tiled inference |
+| `Tzefa_Ocr/Line_Segmentation.py` | YOLO-OBB, resize to 640×640, Y-axis detection + X scaling |
+| `Tzefa_Ocr/image_preprocessing.py` | Word segmentation via repeated dilation to exactly 3 components |
+| `Tzefa_Ocr/OCR.py` | Lazy-loaded fine-tuned TrOCR word model |
+| `Tzefa_Language/ErrorCorrection.py` | Edit distance correction against Tzefa vocabulary per argument type |
+| `Tzefa_Language/topy.py` | Compiler: Tzefa instructions → Python code strings |
+| `Tzefa_Language/createdpython.py` | VM runtime: variables, lists, conditions, functions, I/O |
+| `Tzefa_Web/server.py` | Flask server with base64 image rendering and toggle UI |
+
+---
+
+## Web UI
+
+The self-hosted web page at `localhost:5000` provides:
+
+**Left panel (Image):**
+- Binarized image
+- Binarized + line bounding boxes overlay
+- Original uploaded image
+
+**Right panel (Text):**
+- Raw OCR output (what TrOCR read)
+- Error-corrected output (matched to Tzefa vocabulary)
+- Compiled Python code
+- Execution output (stdout from running the generated program)
+
+Each view is toggled via buttons. If the pipeline crashes at any stage, all prior results remain visible.
+
+---
+
+## Current Status (March 2026)
+
+### Working
+- ✅ Full 7-stage pipeline runs end-to-end from image to execution
+- ✅ Binarization model performs well (HighResMAnet mit_b5)
+- ✅ Word OCR model performs well (fine-tuned TrOCR)
+- ✅ Error correction corrects all 3 tokens per line (command + arg1 + arg2)
+- ✅ Compilation and execution with subprocess isolation
+- ✅ Web UI with full toggle views for debugging every stage
+- ✅ Word segmentation via repeated dilation enforces exactly 3 words per line
+
+### Needs Work
+- ⚠️ **Line Segmentation model** is the weakest link — detection accuracy requires X-axis padding compensation due to 640×640 squash. Needs more training data and/or architectural improvements.
+- ⚠️ **Number model** is incomplete (no weights in `Tzefa_Models/number_model/`)
+- ⚠️ **ErrorCorrection + topy global state** requires `importlib.reload()` between runs
+- ⚠️ **createdpython.py** has 3 error-handler call-site bugs (wrong arg counts)
+
+---
 
 ## Getting Started
 
-Each component directory may contain its own `README.md` and `requirements.txt` for specific setup and usage instructions. The `Tzefa-Web` application can serve as an initial entry point for testing the image-to-code pipeline.
+```bash
+# 1. Install dependencies
+pip install -r Tzefa_Ocr/requirements.txt
+
+# 2. Ensure model checkpoints exist at paths in:
+#    Tzefa_Ocr/Binarization.py (DEFAULT_CHECKPOINT_PATH)
+#    Tzefa_Ocr/Line_Segmentation.py (MODEL_PATH)
+#    Tzefa_Ocr/OCR.py (WORD_MODEL_PATH)
+
+# 3. Run the web server
+python Tzefa_Web/server.py
+
+# 4. Open http://localhost:5000, upload a handwritten Tzefa program image
+```
+
+---
+
+## Tzefa Language
+
+Every instruction is exactly 3 tokens: `COMMAND ARG1 ARG2`
+
+Examples:
+```
+MAKEINTEGER NUMY FIVE       -- create integer NUMY with value 5
+MULTIPLY RESULT BIGLY       -- RESULT = RESULT * BIGLY
+SUBTRACT NUMY ONE           -- NUMY = NUMY - ONE
+WHILETRUE JUSTBIGGER FOURTEEN  -- while JUSTBIGGER is true, loop until line 14
+PRINTINTEGER TEMPORARY BREAK   -- print TEMPORARY with newline
+```
+
+Numbers are written as words (ZERO through ONEHUNDRED) to maximize OCR error correction coverage. The compiler (`topy.py`) generates Python code that runs on the Tzefa VM (`createdpython.py`).

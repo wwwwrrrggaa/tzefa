@@ -1,49 +1,94 @@
-## Project design:
+# Tzefa — TODO
 
-- Progress needs to be made in all 3 branches together (ocr, language, app).
-- OCR and language need to remain independent for debugging.
-- **Current Major Shift**: Moving away from boilerplate image processing methods (Sauvola, PaddleOCR unwarping) to custom Deep Learning models for Binarization and Line Segmentation.
+*Updated: March 2, 2026*
 
-## To do current
+---
 
-### OCR Pipeline (Deep Learning Focus)
-- [ ] **Binarization**:
-    - [x] Create synthetic data for document binarization.
-    - [x] Implement training loop (`Tzefa_Ocr_Training/Binarization/Training.py`).
-    - [ ] Train DL model for document binarization (In Progress).
-    - [ ] Evaluate and tune binarization model.
-    - [ ] Replace `sbb_binarize` in `image_preprocessing.py` with new model inference.
-- [ ] **Line Segmentation**:
-    - [ ] Research and select architecture for line segmentation (currently empty folder).
-    - [ ] Create/Synthesize dataset for line segmentation.
-    - [ ] Train DL model for line segmentation.
-- [ ] **Text Recognition**:
-    - [ ] Continue improving TrOCR based models for words and numbers.
+## P0 — Fix Now
 
-### Integration & App
-- [ ] Integrate new DL Binarization model into `Tzefa_Ocr`.
-- [ ] Integrate new Line Segmentation model into `Tzefa_Ocr`.
-- [ ] Connect updated OCR pipeline with `Tzefa_Web` GUI.
-- [ ] Implement multiprocessing for better UX.
-- [ ] **Server Interface**: Develop a robust server interface/API for the backend.
+### VM Runtime Bugs (`createdpython.py`)
+- [ ] `makeeindexrror` called with 3 args, expects 4 (lines ~499, ~507) — crashes on list index-out-of-bounds
+- [ ] `readerror()` called with no args, expects 1 (line ~528) — crashes on unreadable variable access
+- [ ] `COND.givetype()` references `self.type` which is never set in `__init__` — AttributeError
 
-### Language & Error Correction
-- [ ] **Immediate Types**: Replace digit recognition with number words (e.g., "SEVENTEEN") to enable full error correction.
-- [ ] **Lowercase Support**: Update compiler and OCR to support lowercase characters.
-- [ ] **Syntax Improvements**: Simplify function names and make coding easier/more intuitive.
-- [ ] **Custom Levenshtein**: Implement weighted Levenshtein distance for OCR error correction (e.g., low cost for 'l' vs 'I', high for 'X' vs 'O').
-- [ ] Improve compiler (`topy.py`) and error-correction (`ErrorCorrection.py`).
-- [ ] Expand `listfunctions` to support more language features.
+### Files to Delete
+- [ ] `Tzefa_Web/app.py` — broken, imports wrong package name, fully superseded by `server.py`
+- [ ] `Tzefa_Web/Tzefa_website.py` — broken, calls `.join()` on a dict, fully superseded by `server.py`
 
-## OCR Strategy:
+---
 
-    1. **Preprocessing (Binarization)**: Train a custom DL model to handle various lighting/noise conditions, replacing static algorithms like Sauvola.
-    2. **Detection (Line Segmentation)**: Train a custom DL model to accurately segment lines of code, replacing heuristic methods.
-    3. **Recognition**: Use TrOCR (already working well), expand dataset.
+## P1 — Do Soon
 
-## GUI Strategy:
+### Line Segmentation (Weakest Model)
+The YOLO-OBB line segmentation model is the primary bottleneck. The current workarounds:
+- Force resize to 640×640 (squashes aspect ratio) — gives good Y-axis detection
+- X-axis needs 50% padding compensation because squash makes detections too narrow
+- Word segmentation uses repeated dilation to enforce exactly 3 components per line
 
-    1. Photo editing with adjustable filters.
-    2. Visualization of detection output (lines).
-    3. Error correction interface for recognized text.
-    4. Code execution and editing.
+**Recommended improvements:**
+- [ ] **Train on more data** — more handwritten Tzefa images with line-level annotations
+- [ ] **Train on binarized images** — the model sees binarized input at inference time, train on the same distribution
+- [ ] **Evaluate letterboxing** — train with aspect-ratio-preserving letterbox instead of squash, so detection widths are accurate without padding hacks
+- [ ] **Cache the YOLO model** — currently reloaded from disk for every image (`load_model()` called in `segment_lines()`)
+
+### Number Model
+- [ ] Complete training and add weights to `Tzefa_Models/number_model/`
+- [ ] Wire back into `OCR.py` as a lazy-loaded second model
+
+### Add `.gitignore`
+- [ ] Exclude: `__pycache__/`, `uploads/`, `*.pyc`, `Tzefa_Models/` (multi-GB weights), `Tzefa_Datasets/`, `*.prof`
+
+---
+
+## P2 — Architecture Improvements
+
+### Eliminate Global State
+- [ ] **Refactor `ErrorCorrection.py` into a class** — 15+ module-level globals (`counter`, `thetype`, `insidefunction`, `listfunctions`, `listezfunc`, `listall`, etc.) mutated during compilation. Currently requires `importlib.reload()` between web requests. One pipeline run = one class instance = clean state.
+- [ ] **Refactor `topy.py` into a class** — same pattern. `listofindentchanges`, `infunction`, `dictofinstructions` become instance state.
+- [ ] **Add reset to `createdpython.py`** — VM state (`allthevars`, `alltheconds`, stacks) is module-level. Subprocess execution isolates this for now, but in-process re-runs get corrupt state.
+
+### Rename Builtin Shadows
+- [ ] `type` → `var_type` (4+ functions in `topy.py`)
+- [ ] `bool` → `bool_name` (3 functions in `topy.py`)
+- [ ] `pow()` → `mathpow_impl()` in `createdpython.py` (shadows `builtins.pow`)
+
+---
+
+## P3 — Nice to Have
+
+### Language
+- [ ] Extend `Number2Name.py` beyond 100 (currently hardcoded 0–100)
+- [ ] Rename typos: `ASSSIGNINT`→`ASSIGNINT`, `handelfirstword`→`handlefirstword`, `makeparenthasis`→`makeparenthesis`, `errore`→`error_handler`, `makeeindexrror`→`make_index_error`
+- [ ] Clean up `Tzefa_Language/main.py` — uses `import test` for side-effect execution (module cache prevents re-runs)
+
+### Web UI
+- [ ] Add word-level bbox overlay (third image toggle) — shows where each word was cropped, helps debug OCR issues
+- [ ] Add confidence scores per corrected line — show edit distance from raw OCR to corrected vocabulary
+- [ ] Manual correction interface — let user fix OCR mistakes before compilation
+
+### OCR Pipeline
+- [ ] Batch word OCR inference (currently one word at a time)
+- [ ] Add custom Levenshtein with weighted OCR confusion pairs (l/I, O/0, S/5, etc.) — `ocr_edit_distance` exists in ErrorCorrection.py but isn't used
+
+---
+
+## Done (This Session — March 2, 2026)
+
+- [x] Built self-hosted web UI with toggle views for every pipeline stage
+- [x] Added execution output (Stage 7) — subprocess with 15s timeout
+- [x] Fixed SIMPLEDIVIDE dispatch bug (was mapped to COPYLIST)
+- [x] Fixed PRINTSTRING (bare `name` instead of `tostri(name)`, inverted BREAK logic)
+- [x] Fixed LIST `self.currentindex` → `self.index` mismatch
+- [x] Fixed `updatesizelistofindnets` missing `global` keyword
+- [x] Fixed `findword` shadowing `min` builtin + unsafe 3-element default return
+- [x] Fixed `torch.amp.autocast` crash on CPU
+- [x] Fixed `listofindents` index out of range (undersized array)
+- [x] Fixed `CHANGECOMPARE` matching control flow indent check (`"COMPARE" in name` was too broad)
+- [x] Fixed lowercase in corrected output (all tokens now uppercased, all 3 corrected against vocabulary)
+- [x] Rewrote word segmentation — repeated small kernel dilation until exactly 3 components
+- [x] Rewrote Line Segmentation — force 640×640, scale Y back, scale X with padding
+- [x] Deleted 200 lines of dead stock-model code from `image_preprocessing.py`
+- [x] Removed stock number model + stale paths from `OCR.py`, made it lazy-load
+- [x] Gutted `requirements.txt` from ~30 packages to actual dependencies
+- [x] Fixed `pyproject.toml` requires-python from >=3.14 to >=3.11
+- [x] Removed duplicate dispatch entries + unused variables across multiple files

@@ -467,7 +467,7 @@ class EERROR(Exception):
 class LIST:
     def __init__(self, name, size, readable, writable, TYPE):
         self.size = size
-        self.currentindex = 0
+        self.index = 0
         self.values = [VALUE(name=(str(name) + " " + str(i)), value=0, writable=True, readable=True, TYPE="INT") for i
                        in range(size)]
         self.types = ["INT" for i in range(size)]

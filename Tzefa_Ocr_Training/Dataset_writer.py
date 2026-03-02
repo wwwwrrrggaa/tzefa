@@ -8,7 +8,7 @@ from tqdm import tqdm
 # --- CONFIGURATION ---
 SOURCE_DIR = r"C:\dev\projects\PycharmProjects\tzefa\Tzefa_Datasets\Binarization\Unified_Batch"
 OUTPUT_LMDB = r"C:\dev\projects\PycharmProjects\tzefa\Tzefa_Datasets\Binarization\Unified_LMDB"
-MAP_SIZE = 10995116277  # 1TB (Virtual map size, doesn't take actual space)
+MAP_SIZE = 10 * 1024 * 1024 * 1024  # 5GB
 
 def create_lmdb():
     img_dir = os.path.join(SOURCE_DIR, "images")

@@ -1,3 +1,2 @@
-from Tzefa_Language.createdpython import * 
-def Y():
+from Tzefa_Language.createdpython import *
 printvars()

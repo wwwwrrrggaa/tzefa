@@ -1,5 +1,8 @@
 from pathlib import Path
 import shutil
+
+import cv2
+import numpy as np
 from PIL import Image
 import os
 import random
@@ -293,7 +296,7 @@ def unpack_NoisyOffice(image_source_dir, mask_source_dir, output_dir):
                 image_path=str(selected_img),
                 mask_path=str(mask_path),
                 out_dir=output_dir,
-                resize_to=None # Keep Original Size
+                resize_to=None,  # Keep Original Size
             )
             count += 1
         else:
@@ -301,16 +304,142 @@ def unpack_NoisyOffice(image_source_dir, mask_source_dir, output_dir):
 
     print(f"Done. Processed {count} NoisyOffice pairs into Batch 7.")
 
+
+def unpack_DIVA_Batch12(temp_root_dir, output_dir):
+    """
+    Unpacks DIVA-HisDB using Otsu's Binarization gated by the Layout GT.
+    """
+    temp_root = Path(temp_root_dir)
+    out_path = Path(output_dir)
+
+    manuscripts = ["CB55", "CS18", "CS863"]
+    subsets = ["training", "validation", "public-test"]
+
+    print("--- Starting Batch 12: DIVA-HisDB (Otsu-Gated Ink Extraction) ---")
+
+    count = 0
+    for manuscript in manuscripts:
+        for subset in subsets:
+            data_folder = temp_root / f"img-{manuscript}" / "img" / subset
+            gt_folder = temp_root / f"pixel-level-gt-{manuscript}" / "pixel-level-gt" / subset
+
+            if not data_folder.exists():
+                continue
+
+            for img_path in data_folder.glob("*.jpg"):
+                gt_path = gt_folder / img_path.name.replace(".jpg", ".png")
+
+                if gt_path.exists():
+                    try:
+                        # 1. Load Original Image (Grayscale)
+                        img_gray = cv2.imread(str(img_path), cv2.IMREAD_GRAYSCALE)
+
+                        # 2. Load GT Layout Mask
+                        gt_img = cv2.imread(str(gt_path), cv2.IMREAD_UNCHANGED)
+
+                        # Handle potential 3-channel or 1-channel GT
+                        if len(gt_img.shape) == 3:
+                            gt_indices = gt_img[:, :, 0]  # Blue channel often contains index
+                        else:
+                            gt_indices = gt_img
+
+                        # Create the Region Mask (Select Main Text Body zones)
+                        # Value 1 and 8 are standard for 'Main Text' in HisDB
+                        region_mask = np.zeros_like(img_gray)
+                        region_mask[(gt_indices == 1) | (gt_indices == 8)] = 255
+
+                        # 3. Apply Otsu's Binarization
+                        # THRESH_BINARY results in 0 for Ink and 255 for Paper
+                        _, ink_mask = cv2.threshold(img_gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+
+                        # 4. Gating: Keep Ink only inside the Region Mask
+                        # Start with a pure white background (255)
+                        final_mask = np.full(img_gray.shape, 255, dtype=np.uint8)
+
+                        # Only where region_mask is active, use the Otsu result
+                        final_mask[region_mask == 255] = ink_mask[region_mask == 255]
+
+                        # 5. Save and Cleanup
+                        temp_mask_name = f"temp_otsu_{manuscript}_{img_path.stem}.png"
+                        cv2.imwrite(temp_mask_name, final_mask)
+
+                        add_pair_to_dataset(
+                            image_path=str(img_path),
+                            mask_path=temp_mask_name,
+                            out_dir=str(out_path),
+                            resize_to=None,
+                        )
+                        count += 1
+
+                        if os.path.exists(temp_mask_name):
+                            os.remove(temp_mask_name)
+
+                    except Exception as e:
+                        print(f"Error on {img_path.name}: {e}")
+
+    print(f"Done. Processed {count} DIVA images using Region-Gated Otsu.")
+
+
+def unpack_Obs_Dataset(input_dir, gt_dir, output_dir):
+    """
+    Unpacks the 'Obs' dataset and inverts the GT masks.
+    Logic: .scanned.png (Input) -> .clean.png (GT)
+    Mask Inversion: Black (0) becomes White (255), White (255) becomes Black (0).
+    """
+    input_path = Path(input_dir)
+    gt_path = Path(gt_dir)
+
+    print(f"--- Processing Batch 14: Obs Dataset (with Mask Inversion) ---")
+
+    # Match pairs based on the filename stem before '.scanned' or '.clean'
+    # Example: 3_nouvel-obs...scanned.png
+    images = list(input_path.glob("*.scanned.png"))
+    count = 0
+
+    for img_file in images:
+        # Construct the matching GT filename
+        # replace '.scanned.png' with '.clean.png'
+        gt_file_name = img_file.name.replace(".scanned.png", ".clean.png")
+        full_gt_path = gt_path / gt_file_name
+
+        if full_gt_path.exists():
+            try:
+                # Load the GT Mask
+                mask = cv2.imread(str(full_gt_path), cv2.IMREAD_GRAYSCALE)
+
+                # REVERSE PIXELS: (black to white and white to black)
+                # This ensures Ink is 0 and Background is 255 (standard for binarization)
+                # or vice-versa depending on your training needs.
+                inverted_mask = cv2.bitwise_not(mask)
+
+                # Save to a temporary file for add_pair_to_dataset to pick up
+                temp_mask_name = f"temp_inverted_{img_file.stem}.png"
+                cv2.imwrite(temp_mask_name, inverted_mask)
+
+                # Add to dataset
+                add_pair_to_dataset(
+                    image_path=str(img_file),
+                    mask_path=temp_mask_name,
+                    out_dir=output_dir,
+                    resize_to=None,  # Keep original resolution
+                )
+
+                # Cleanup temp file
+                if os.path.exists(temp_mask_name):
+                    os.remove(temp_mask_name)
+
+                count += 1
+            except Exception as e:
+                print(f"Error processing {img_file.name}: {e}")
+        else:
+            print(f"Warning: No GT found for {img_file.name}")
+
+    print(f"Done. Processed {count} inverted pairs into Batch 14.")
+
 # --- EXECUTION ---
-if __name__ == '__main__':
-    # 3. Unpack NoisyOffice (Batch 7)
-    NOISY_IMG_SOURCE = r"C:\dev\projects\PycharmProjects\tzefa\Tzefa_Datasets\temp\images"
-    NOISY_MSK_SOURCE = r"C:\dev\projects\PycharmProjects\tzefa\Tzefa_Datasets\temp\masks"
-    BATCH_7_OUTPUT = r"C:\dev\projects\PycharmProjects\tzefa\Tzefa_Datasets\Binarization\Batch_7"
+if __name__ == "__main__":
+    OBS_INPUT = r"C:\dev\projects\PycharmProjects\tzefa\Tzefa_Datasets\temp\obs\input"
+    OBS_GT = r"C:\dev\projects\PycharmProjects\tzefa\Tzefa_Datasets\temp\obs\gt\bin"
+    BATCH_14_OUT = r"C:\dev\projects\PycharmProjects\tzefa\Tzefa_Datasets\Binarization\Batch_14"
 
-    unpack_NoisyOffice(NOISY_IMG_SOURCE, NOISY_MSK_SOURCE, BATCH_7_OUTPUT)
-
-    # --- Previous Batches (Commented out) ---
-    # CHALLENGE_SOURCE = r"C:\dev\projects\PycharmProjects\tzefa\Tzefa_Datasets\temp\Challenge-1-ForTrain\train-50"
-    # BATCH_5_OUTPUT = r"C:\dev\projects\PycharmProjects\tzefa\Tzefa_Datasets\Binarization\Batch_5"
-    # unpack_Challenge1(CHALLENGE_SOURCE, BATCH_5_OUTPUT)
+    unpack_Obs_Dataset(OBS_INPUT, OBS_GT, BATCH_14_OUT)

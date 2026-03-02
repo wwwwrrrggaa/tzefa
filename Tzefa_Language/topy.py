@@ -215,10 +215,10 @@ def RETURN(name, stay, linenum):
 
 def PRINTSTRING(name, state, linenum):
     if (state == "BREAK"):
-        state = "False"
-    else:
         state = "True"
-    return "line(" + str(linenum) + "); " + "Print(" + "getvar('STRING',name)," + state + "); " + "endline()"
+    else:
+        state = "False"
+    return "line(" + str(linenum) + "); " + "Print(" + "getvar('STR'," + tostri(name) + ")," + state + "); " + "endline()"
 
 
 def PRINTINTEGER(name, state, linenum):
@@ -402,21 +402,18 @@ dictofinstructions["ADDVALUES"] = ADDVALUES
 dictofinstructions["MULTIPLY"] = MULTIPLY
 dictofinstructions["MATHPOW"] = MATHPOW
 dictofinstructions["DIVIDE"] = DIVIDE
-dictofinstructions["SIMPLEDIVIDE"] = COPYLIST
+dictofinstructions["SIMPLEDIVIDE"] = SIMPLEDIVIDE
 dictofinstructions["SUBTRACT"] = SUBTRACT
 dictofinstructions["MODULO"] = MODULO
 dictofinstructions["COMBINE"] = COMBINE
 dictofinstructions["BLANKSPACES"] = BLANKSPACES
-dictofinstructions["ADDSIZE"] = ADDSIZE
-dictofinstructions["COPYLIST"] = COPYLIST
 dictofinstructions["RETURN"] = RETURN
 dictofinstructions["TYPETOINT"] = TYPETOINT
 
-listoflists = ""
 
 
 def makepredict(listi, i):
-    if (listi[0] in dictofinstructions):
+    if listi[0] in dictofinstructions:
         return dictofinstructions[listi[0]](listi[1], listi[2], i)
     else:
         listfun = listfunctionswithtypes[listi[0]]
@@ -425,14 +422,18 @@ def makepredict(listi, i):
 
 
 def makepyfile(listi):
-    f = open(r"C:\Users\yonat\PycharmProjects\tzefa\Tzefa_Language\test.py", 'w+')  # Adjusted path
-    f.write("from Tzefa_Language.createdpython import * \n")
-    counterindent = 0
-    indent = "    "
-    for i in range(1, len(listi) + 1):
-        counterindent += listofindentchanges[i]
-        f.write(indent * counterindent + makepredict(listi[i - 1], i) + '\n')
-    f.write("printvars()")
+    from pathlib import Path
+
+    outfile = Path(__file__).parent / "test.py"
+    with outfile.open("w+", encoding="utf-8") as f:
+        f.write("from Tzefa_Language.createdpython import *\n")
+        counterindent = 0
+        indent = "    "
+        for i in range(1, len(listi) + 1):
+            counterindent += listofindentchanges[i]
+            f.write(indent * counterindent + makepredict(listi[i - 1], i) + '\n')
+        f.write("printvars()")
+
 
 
 
