@@ -1,4 +1,6 @@
 # Tzefa
+<img width="2712" height="1207" alt="image" src="https://github.com/user-attachments/assets/fbb52b28-6673-421a-bf7b-604048e0b078" />
+
 
 **Tzefa** is an end-to-end system that photographs handwritten code on a whiteboard, recognizes it via a custom OCR pipeline, compiles it through a custom programming language, and executes it — all from a single image upload in a self-hosted web UI.
 
