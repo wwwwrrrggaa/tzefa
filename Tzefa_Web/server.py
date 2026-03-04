@@ -67,8 +67,11 @@ def draw_bboxes_on_image(img_array: np.ndarray, bboxes) -> np.ndarray:
 
 
 def draw_word_bboxes_on_image(img_array: np.ndarray, bboxes, word_bboxes) -> np.ndarray:
-    """Draw line bboxes (red) and word bboxes (green) with OCR text labels."""
-    vis = draw_bboxes_on_image(img_array, bboxes)
+    """Draw word bboxes (green/blue/orange) with OCR text labels — no line bboxes."""
+    if len(img_array.shape) == 2:
+        vis = cv2.cvtColor(img_array, cv2.COLOR_GRAY2RGB)
+    else:
+        vis = img_array.copy()
     if word_bboxes is None:
         return vis
 

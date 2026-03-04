@@ -14,6 +14,9 @@
 /.vscode/
 /.pytest_cache/
 
+# Ignore HF scripts (contain HF tokens)
+/Tzefa_HF/scripts/
+
 # Unignore files
 !*.py
 !*.md

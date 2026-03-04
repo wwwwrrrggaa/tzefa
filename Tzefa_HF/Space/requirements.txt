@@ -1,0 +1,14 @@
+torch
+torchvision
+transformers
+segmentation-models-pytorch
+albumentations
+ultralytics
+timm
+opencv-python-headless
+pillow
+numpy
+gradio
+huggingface_hub
+fast_edit_distance
+

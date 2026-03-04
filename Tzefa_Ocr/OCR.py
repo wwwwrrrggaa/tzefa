@@ -25,12 +25,35 @@ def _load_word_model():
     print("Word OCR Model loaded.")
 
 
+def _pad_to_aspect_ratio(image, max_ratio=4.0):
+    """
+    If the image is wider than max_ratio * height, pad top and bottom with
+    white so the aspect ratio doesn't exceed max_ratio.  This prevents TrOCR
+    from receiving an extreme landscape crop (e.g. 1195×94) that collapses to
+    an unreadable strip when rescaled to the model's 384×384 input.
+    """
+    w, h = image.size
+    if w <= max_ratio * h:
+        return image  # already fine
+
+    target_h = int(w / max_ratio)
+    pad_total = target_h - h
+    pad_top = pad_total // 2
+    pad_bottom = pad_total - pad_top
+
+    from PIL import ImageOps
+    return ImageOps.expand(image, border=(0, pad_top, 0, pad_bottom), fill=(255, 255, 255))
+
+
 def ocr_word(image):
     """Run OCR on a single word crop. Returns recognized text string."""
     _load_word_model()
 
     if image.mode != "RGB":
         image = image.convert("RGB")
+
+    # Guard against extreme aspect ratios that confuse TrOCR's 384×384 resize
+    image = _pad_to_aspect_ratio(image, max_ratio=4.0)
 
     pixel_values = _processor(image, return_tensors="pt").pixel_values.to(DEVICE)
 
@@ -43,7 +66,7 @@ def ocr_word(image):
 
 if __name__ == "__main__":
     import os
-    test_img_path = r"E:\Storage\tests\Testword.jpg"
+    test_img_path = r"C:\Users\yonat\Downloads\image.png"
     if os.path.exists(test_img_path):
         print(f"Testing OCR on: {test_img_path}")
         print(f"Result: {ocr_word(Image.open(test_img_path))}")

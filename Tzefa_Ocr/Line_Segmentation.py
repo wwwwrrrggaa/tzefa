@@ -29,7 +29,7 @@ def segment_lines(img_array):
     # Bug fix: previously the image was manually squashed to 640x640 (distorting
     # aspect ratio), then coords were scaled back with wrong scale_x, which is
     # why a 50% X-pad hack was needed. Removed both.
-    results = model.predict(img_rgb, imgsz=INFERENCE_SIZE, conf=0.2, iou=0.45, verbose=False)
+    results = model.predict(img_rgb, imgsz=INFERENCE_SIZE, conf=0.19, iou=0.2, verbose=False)
     truelines = []
     if len(results) > 0 and results[0].obb is not None:
         # xyxyxyxy coords are already in original image space when the original
@@ -39,11 +39,25 @@ def segment_lines(img_array):
         # Sort lines from top to bottom
         obbs = sorted(obbs, key=lambda pts: np.min(pts[:, 1]))
 
+        # The model consistently under-predicts the width.
+        # Add a flat pixel pad to each side independently so that clipping one
+        # side (e.g. at x=0) never causes the other side to also be missed.
+        X_PAD_FRAC = 0.12  # add 12% of raw bbox width to EACH side
+
         for pts in obbs:
-            min_x = int(np.clip(np.min(pts[:, 0]), 0, orig_w))
-            max_x = int(np.clip(np.max(pts[:, 0]), 0, orig_w))
-            min_y = int(np.clip(np.min(pts[:, 1]), 0, orig_h))
-            max_y = int(np.clip(np.max(pts[:, 1]), 0, orig_h))
+            raw_min_x = np.min(pts[:, 0])
+            raw_max_x = np.max(pts[:, 0])
+            raw_min_y = np.min(pts[:, 1])
+            raw_max_y = np.max(pts[:, 1])
+
+            raw_w = raw_max_x - raw_min_x
+            pad = raw_w * X_PAD_FRAC
+
+            # Expand each side by the same flat amount, clip independently
+            min_x = int(np.clip(raw_min_x - pad, 0, orig_w))
+            max_x = int(np.clip(raw_max_x + pad, 0, orig_w))
+            min_y = int(np.clip(raw_min_y, 0, orig_h))
+            max_y = int(np.clip(raw_max_y, 0, orig_h))
 
             w = max_x - min_x
             h = max_y - min_y

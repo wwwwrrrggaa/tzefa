@@ -3,6 +3,8 @@ import gc
 import traceback
 import subprocess
 import torch
+import cv2
+import numpy as np
 from pathlib import Path
 from PIL import Image
 import importlib
@@ -142,14 +144,17 @@ def image_to_code_pipeline(img_array):
                 abs_y1 = line_y - 20
                 abs_y2 = line_y + line_h + 20
 
-                img_h, img_w = img_array.shape[:2]
+                img_h, img_w = binarified_img_array.shape[:2]
                 final_x1 = max(0, int(abs_x1))
                 final_y1 = max(0, int(abs_y1))
                 final_x2 = min(img_w, int(abs_x2))
                 final_y2 = min(img_h, int(abs_y2))
 
-                crop_array = img_array[final_y1:final_y2, final_x1:final_x2]
+                # Crop from the binarized image — same source the bboxes were
+                # computed on, and the same pixels shown in the word bbox overlay.
+                crop_array = binarified_img_array[final_y1:final_y2, final_x1:final_x2]
                 cropped_pil = Image.fromarray(crop_array)
+
 
                 recognized_text = OCR.ocr_word(cropped_pil)
                 # TrOCR can predict spaces inside a single-word crop (e.g. "BIGLY Y"
