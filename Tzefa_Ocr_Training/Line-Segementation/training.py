@@ -1,7 +1,5 @@
 import os
-import sys
 import torch
-import shutil
 from pathlib import Path
 
 # --- AMD/ROCm Stability Fixes ---
@@ -21,7 +19,7 @@ DATA_YAML_PATH = os.path.join(DATASET_ROOT, "data.yaml")
 PRETRAINED_MODEL = "yolo11x-obb.pt"
 
 PROJECT_DIR = os.path.join(BASE_DIR, r"Tzefa_Models\Line_Segmentation")
-RUN_NAME = "run_fresh_XL_speed"
+RUN_NAME = "yolo11x-obb-fresh"  # Unique name for this training run
 
 EPOCHS = 50
 IMG_SIZE = 640
@@ -32,14 +30,29 @@ BATCH_SIZE = 4
 def clear_cache():
     """Deletes .npy cache files to force YOLO to re-check the data."""
     print("🧹 Cleaning old .npy cache files...")
-    images_dir = Path(DATASET_ROOT) / "images"
-    npy_files = list(images_dir.glob("*.npy"))
-    for f in npy_files:
-        try:
-            os.remove(f)
-        except:
-            pass
-    print(f"   Deleted {len(npy_files)} cache files.")
+
+    # Check both root/images and split directories (train/images, val/images)
+    dirs_to_check = [
+        Path(DATASET_ROOT) / "images",
+        Path(DATASET_ROOT) / "train" / "images",
+        Path(DATASET_ROOT) / "val" / "images",
+        Path(DATASET_ROOT) / "test" / "images"
+    ]
+
+    total_deleted = 0
+    for images_dir in dirs_to_check:
+        if not images_dir.exists():
+            continue
+
+        npy_files = list(images_dir.glob("*.npy"))
+        for f in npy_files:
+            try:
+                os.remove(f)
+                total_deleted += 1
+            except:
+                pass
+
+    print(f"   Deleted {total_deleted} cache files.")
 
 
 def train():

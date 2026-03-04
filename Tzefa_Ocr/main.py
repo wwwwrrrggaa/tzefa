@@ -76,6 +76,7 @@ def image_to_code_pipeline(img_array):
     result = {
         "binarized_img": None,
         "truelines": None,
+        "word_bboxes": None,   # list of lists: [[( text, (x1,y1,x2,y2) ), ...], ...]
         "raw_ocr_lines": None,
         "corrected_lines": None,
         "compiled_code": None,
@@ -151,17 +152,24 @@ def image_to_code_pipeline(img_array):
                 cropped_pil = Image.fromarray(crop_array)
 
                 recognized_text = OCR.ocr_word(cropped_pil)
+                # TrOCR can predict spaces inside a single-word crop (e.g. "BIGLY Y"
+                # instead of "BIGLY"), which inflates the token count and breaks
+                # downstream correction. Each word crop must be exactly one token.
+                # Keep the longest part — it's almost always the real word.
+                parts = recognized_text.split()
+                recognized_text = max(parts, key=len) if parts else recognized_text
                 line_tuples.append((recognized_text, (final_x1, final_y1, final_x2, final_y2)))
 
             raw_line_text = " ".join([t[0] for t in line_tuples])
             raw_ocr_lines.append(raw_line_text)
             all_lines_tuples.append(line_tuples)
-            print(f"      Line {line_number}: {len(line_tuples)} words -> {raw_line_text}")
+            print(f"      Line {line_number}: {len(line_tuples)} tokens -> {raw_line_text}")
 
         print("Flushing OCR Model from VRAM...")
         clear_vram()
 
         result["raw_ocr_lines"] = raw_ocr_lines
+        result["word_bboxes"] = all_lines_tuples
         result["stage"] = "ocr"
     except Exception as e:
         clear_vram()
@@ -180,31 +188,36 @@ def image_to_code_pipeline(img_array):
                 index_list.append(0)
                 continue
 
-            # Word segmentation guarantees exactly 3 words per line.
             # Uppercase all tokens — TrOCR outputs lowercase,
             # but the entire Tzefa vocabulary is uppercase.
+            # Pad/trim to exactly 3 tokens (command, arg1, arg2).
             raw_tokens = [t[0].upper() for t in line_entries]
+            while len(raw_tokens) < 3:
+                raw_tokens.append("")
+            raw_tokens = raw_tokens[:3]
 
-            # Correct the command (word 0) against the function list
+            # Correct the command word against the function list to get its index.
+            # All argument correction is intentionally left to toline() in Stage 5,
+            # which processes lines in order and registers new variable names into
+            # listall as it goes — so later lines can fuzzy-match those names.
+            # Doing arg correction here (before var names are registered) caused
+            # wrong fuzzy matches for user-defined variable names.
             cleaned_first, index, _ = ErrorCorrection.handelfirstword(raw_tokens[0])
             index_list.append(index)
 
-            # Correct arg1 and arg2 against the appropriate vocabulary lists
+            # For "new variable" declarations (simpler[1] == 0), register the raw
+            # arg1 token into the correct listall bucket right now, so that toline()
+            # in Stage 5 can match it when it encounters later lines that reference it.
             simpler = ErrorCorrection.listsimplefunc[index]
-            listall = ErrorCorrection.listall
+            if simpler[1] == 0:
+                bucket_idx = simpler[2]
+                if isinstance(bucket_idx, int) and bucket_idx < len(ErrorCorrection.listall):
+                    bucket = ErrorCorrection.listall[bucket_idx]
+                    if raw_tokens[1] and raw_tokens[1] not in bucket:
+                        bucket.append(raw_tokens[1])
 
-            corrected_arg1 = raw_tokens[1]
-            if simpler[1] != 0:
-                vocab_idx = simpler[2]
-                if isinstance(vocab_idx, int) and vocab_idx < len(listall):
-                    corrected_arg1 = ErrorCorrection.findword(listall[vocab_idx], corrected_arg1)[0]
-
-            corrected_arg2 = raw_tokens[2]
-            vocab_idx = simpler[3]
-            if isinstance(vocab_idx, int) and vocab_idx < len(listall):
-                corrected_arg2 = ErrorCorrection.findword(listall[vocab_idx], corrected_arg2)[0]
-
-            full_line_text = cleaned_first + " " + corrected_arg1 + " " + corrected_arg2
+            # Rebuild as a clean 3-word string — toline() will do all vocab matching.
+            full_line_text = cleaned_first + " " + raw_tokens[1] + " " + raw_tokens[2]
             corrected_lines.append(full_line_text)
 
         result["corrected_lines"] = corrected_lines

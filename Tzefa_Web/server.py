@@ -48,7 +48,7 @@ def numpy_to_b64_png(img_array: np.ndarray) -> str:
 
 
 def draw_bboxes_on_image(img_array: np.ndarray, bboxes) -> np.ndarray:
-    """Draw bounding boxes on a copy of the image. Returns RGB image."""
+    """Draw line bounding boxes on a copy of the image. Returns RGB image."""
     if img_array is None or bboxes is None:
         return img_array
 
@@ -63,6 +63,23 @@ def draw_bboxes_on_image(img_array: np.ndarray, bboxes) -> np.ndarray:
         cv2.rectangle(vis, (x, y), (x + w, y + h), color, 2)
         cv2.putText(vis, str(i + 1), (x, max(y - 5, 0)),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.6, (50, 50, 255), 2)
+    return vis
+
+
+def draw_word_bboxes_on_image(img_array: np.ndarray, bboxes, word_bboxes) -> np.ndarray:
+    """Draw line bboxes (red) and word bboxes (green) with OCR text labels."""
+    vis = draw_bboxes_on_image(img_array, bboxes)
+    if word_bboxes is None:
+        return vis
+
+    colors = [(50, 220, 50), (50, 180, 255), (255, 180, 50)]  # green / blue / orange per word slot
+    for line_tuples in word_bboxes:
+        for w_idx, (text, (x1, y1, x2, y2)) in enumerate(line_tuples):
+            color = colors[w_idx % len(colors)]
+            cv2.rectangle(vis, (x1, y1), (x2, y2), color, 2)
+            # Label: show the OCR'd text above the box
+            cv2.putText(vis, text, (x1, max(y1 - 4, 0)),
+                        cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
     return vis
 
 
@@ -99,6 +116,7 @@ def process():
             "original_img": numpy_to_b64_png(img_rgb),
             "binarized_img": "",
             "binarized_bbox_img": "",
+            "word_bbox_img": "",
             "raw_ocr": "",
             "corrected": "",
             "compiled_code": "",
@@ -111,6 +129,10 @@ def process():
         if pipeline["binarized_img"] is not None and pipeline["truelines"] is not None:
             bbox_vis = draw_bboxes_on_image(pipeline["binarized_img"], pipeline["truelines"])
             display["binarized_bbox_img"] = numpy_to_b64_png(bbox_vis)
+
+        if pipeline["binarized_img"] is not None and pipeline["truelines"] is not None and pipeline["word_bboxes"] is not None:
+            word_vis = draw_word_bboxes_on_image(pipeline["binarized_img"], pipeline["truelines"], pipeline["word_bboxes"])
+            display["word_bbox_img"] = numpy_to_b64_png(word_vis)
 
         if pipeline["raw_ocr_lines"] is not None:
             display["raw_ocr"] = "\n".join(pipeline["raw_ocr_lines"])
@@ -134,6 +156,7 @@ def process():
             "original_img": "",
             "binarized_img": "",
             "binarized_bbox_img": "",
+            "word_bbox_img": "",
             "raw_ocr": "",
             "corrected": "",
             "compiled_code": "",

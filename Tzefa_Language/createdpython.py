@@ -134,10 +134,8 @@ def printvars():
 
 def addvar(type, name, value):
     global allthevars
-    if (name in allthevars[type]):
+    if name in allthevars[type]:
         errore.varexistserror(name)
-    else:
-        pass
     if (type == "LIST"):
         allthevars[type][name] = LIST(name, value, True, True, type)
     else:
@@ -155,10 +153,8 @@ def getvar(type, name):
 def addlocalvar(type, name, value):
     global dictlocalvars, allthevars
     allthelocalrvars = dictlocalvars
-    if (name in allthevars[type]):
+    if name in allthevars[type]:
         errore.varexistserror(name)
-    else:
-        pass
     if (type == "LIST"):
         allthevars[type][name] = LIST(name, value, True, True, type)
         allthelocalrvars[type][name] = allthevars[type][name]
@@ -744,11 +740,13 @@ THETRUTH = COND('EQUALS')
 THETRUTH.changeleft(TEMPORARY)
 THETRUTH.changeright(TEMPORARY)
 allthevars = {"INT": {"LOOPINTEGER": LOOPINTEGER, "TEMPORARY": TEMPORARY, "LOCALINT": LOCALINT},
-              "STR": {"LOOPSTRING": LOOPSTRING, "TEMPSTRING": TEMPSTRING, "LOCALSTR": LOCALSTR, "INTEGER": INTEGER,
+              "STR": {"LOOPSTRING": LOOPSTRING, "TEMPSTRING": TEMPORARY, "LOCALSTR": LOCALSTR, "INTEGER": INTEGER,
                       "STRING": STRING, "LIST": LISTI, "BOOLEAN": BOOLEAN},
               "LIST": {"LOOPLIST": LOOPLIST, "LOCALLIST": LOCALLIST}, "BOOLEAN": {"LOOPBOOL": LOOPBOOL}}
-for i in range(101):
-   allthevars["INT"][Number2Name.get_name(i)]=VALUE(name=Number2Name.get_name(i),value=i,readable=True, writable=False, TYPE="INT")
+# Number names (ZERO..ONEHUNDRED) are compile-time constants only.
+# They are resolved to plain integer literals by the compiler (toline/word_to_num)
+# and must NOT live in allthevars["INT"] — that would prevent users from naming
+# their own variables ONE, ZERO, etc.
 examplelocalvars = {"INT": {}, "STR": {}, "LIST": {}, "BOOLEAN": {}}
 dictlocalvars = examplelocalvars.copy()
 programlocals = {"INT": {"LOCALINT": allthevars["INT"]["LOCALINT"]}, "STR": {"LOCALSTR": allthevars["STR"]["LOCALSTR"]},

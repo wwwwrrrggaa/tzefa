@@ -232,7 +232,16 @@ def ocr_edit_distance(word1, word2):
             )
     return dp[m][n]
 
-def findword(somelist, word):
+def findword(somelist, word, use_ocr_weights=False):
+    """
+    Find the closest match to `word` in `somelist`.
+
+    use_ocr_weights=True  → ocr_edit_distance (custom weighted, no cap)
+                            used for function/command name lookups where OCR
+                            can produce arbitrarily garbled prefixes/suffixes.
+    use_ocr_weights=False → standard edit_distance with a generous cap (32)
+                            used for argument vocab lookups (short words, small lists).
+    """
     min_dist = 999
     tobereturned = [word, 0]
     lentobereturned = 16
@@ -243,7 +252,10 @@ def findword(somelist, word):
         if i == word:
             return [i, b]
         else:
-            distance = edit_distance(word, i, 4)
+            if use_ocr_weights:
+                distance = ocr_edit_distance(word, i)
+            else:
+                distance = edit_distance(word, i, 32)
             if distance < min_dist:
                 min_dist = distance
                 tobereturned = [i, b]
@@ -257,11 +269,10 @@ def findword(somelist, word):
 
 
 def handelfirstword(firstword):
-    func, index = findword(listezfunc, firstword)
+    func, index = findword(listezfunc, firstword, use_ocr_weights=True)
     # Check if Arg2 (Index 2 in definition) is NUMNAME (Index 10 in listall)
     # We use listfunctions directly to check the string type
     if listfunctions[index][2] == "NUMNAME":
-        # Return 1 to indicate number/immediate processing
         return (func, index, 1)
     else:
         return (func, index, 0)

@@ -74,9 +74,8 @@ def MAKEBOOLEAN(name, value, linenum):
 
 def NEWLIST(name, value, linenum):
     global infunction
-    inparan = strreadvalue("INT", value)
-    inparan = makeparenthasis(['"LIST"', tostri(name), inparan])
-
+    # value is already a plain integer string (e.g. '6') resolved at compile time
+    inparan = makeparenthasis(['"LIST"', tostri(name), str(int(value))])
     if (infunction):
         declarestr = "addlocalvar" + inparan
     else:
@@ -231,8 +230,8 @@ def PRINTINTEGER(name, state, linenum):
 
 
 def SETINDEX(name, index, linenum):
-    return ("line(" + str(linenum) + "); getvar('LIST'," + tostri(name) + ").changeindex(" + strreadvalue("INT",
-                                                                                                          index) + "); endline()")
+    # index is already a plain integer string resolved at compile time
+    return ("line(" + str(linenum) + "); getvar('LIST'," + tostri(name) + ").changeindex(" + str(int(index)) + "); endline()")
 
 
 def GETSTRING(listname, name, linenum):

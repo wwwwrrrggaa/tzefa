@@ -52,9 +52,13 @@ def linestowords(binarized_img, lines_bboxes):
         # Invert (Text=White) for contour detection
         inverted = cv2.bitwise_not(line_crop)
 
-        # Noise filter thresholds
-        min_word_w = max(3, int(lw * 0.01))
-        min_word_h = max(3, int(lh * 0.1))
+        # Noise filter thresholds.
+        # min_word_h must be large enough to exclude letter fragments / noise
+        # dots but small enough to keep short letters like 'i'. With tight line
+        # bboxes from the new model, lh is small, so we use a higher fraction
+        # than before to avoid counting fragments as extra word boxes.
+        min_word_w = max(5, int(lw * 0.02))
+        min_word_h = max(5, int(lh * 0.25))
 
         # Small fixed kernel — just keep applying it to the same image
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3))
