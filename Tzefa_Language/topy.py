@@ -1,454 +1,392 @@
-def makeparenthasis(listofvals):
-    stri = "("
-    for i in range(len(listofvals) - 1):
-        stri = stri + " " + str(listofvals[i]) + " " + ","
-    stri = stri + " " + str(listofvals[-1]) + " )"
-    return stri
+"""
+topy.py – Tzefa IR → Python code generator.
+
+The bytecode is a 4-element tuple::
+
+    [VERB, TYPE, ARG1, ARG2]
+
+Each handler receives (verb, type_word, arg1, arg2, line_num) and returns a
+Python source-code string that is later assembled by make_py_file().
+"""
+from __future__ import annotations
+
+from typing import Any, Callable, Dict, List, Tuple
 
 
-def strreadvalue(type, name):
-    return "getvar" + makeparenthasis([tostri(type), tostri(name)]) + ".read()"
+# ---------------------------------------------------------------------------
+# Globals
+# ---------------------------------------------------------------------------
+
+_TICK: str = "tick_line() ;"
+_in_function: bool = False
+_current_return_type: str = ""
+
+_user_functions: Dict[str, List[str]] = {}
+
+_indent_changes: List[int] = [0] * 1001
 
 
-lineupdate = "endline() ;"
-infunction = False
-dictoffunct = {i[0]: i for i in [[0]]}
-dictofinstructions = {i: "thetext" for i in dictoffunct}
-listfunctionswithtypes = {i[0]: i for i in [[0]]}
-listfunctionswithtypes["GREATESTDIV"] = ["GREATESTDIV", "LIST", "LIST"]
-for i in listfunctionswithtypes:
-    for j in range(len(listfunctionswithtypes[i])):
-        if (listfunctionswithtypes[i][j] == "BOOL"):
-            listfunctionswithtypes[i][j] = "BOOLEAN"
+# ---------------------------------------------------------------------------
+# Tiny code-gen helpers
+# ---------------------------------------------------------------------------
 
-listofindentchanges = [0 for i in range(1, 1000 + 1)]
+def _args(*values: Any) -> str:
+    """Parenthesised, comma-separated argument list."""
+    return "( " + ", ".join(str(v) for v in values) + " )" if values else "()"
 
 
-def getinstructions(listfunctions, listezfunctions):
-    global dictoffunct, listfunctionswithtypes
-    dictoffunct = {i[0]: i for i in listezfunctions}
-    listfunctionswithtypes = {i[0]: i for i in listfunctions}
+def _q(value: Any) -> str:
+    """Single-quote a value for generated code."""
+    return f"'{value}'"
 
 
-def tostri(value):
-    return "'" + str(value) + "'"
+def _gv(var_type: str, name: str) -> str:
+    """get_var() call expression."""
+    return f"get_var({_q(var_type)}, {_q(name)})"
 
 
-def MAKEINTEGER(name, value, linenum):
-    global infunction
-    inparan = makeparenthasis(['"INT"', tostri(name), value])
-    if (infunction):
-        declarestr = "addlocalvar" + inparan
+def _lp(n: int) -> str:
+    """set_current_line() prefix."""
+    return f"set_current_line({n})"
+
+
+def _stmt(line_num: int, *parts: str) -> str:
+    """Standard statement: set_current_line; body; tick_line."""
+    return f"{_lp(line_num)}; " + "; ".join(parts) + f"; {_TICK}"
+
+
+# ---------------------------------------------------------------------------
+# Register user-defined functions (called by ErrorCorrection after parsing)
+# ---------------------------------------------------------------------------
+
+def register_user_function(name: str, input_type: str, output_type: str) -> None:
+    """Register a user-defined function so the code generator can emit calls."""
+    _user_functions[name] = [name, input_type, output_type]
+
+
+def get_user_functions() -> Dict[str, List[str]]:
+    return _user_functions
+
+
+# ---------------------------------------------------------------------------
+# Handlers — each takes (type_word, arg1, arg2, line_num) -> str
+# ---------------------------------------------------------------------------
+
+# -- MAKE: declare variables -----------------------------------------------
+
+def _make(type_word: str, arg1: str, arg2: str, ln: int) -> str:
+    call = "add_local_var" if _in_function else "add_var"
+    type_map = {"INTEGER": "INT", "STRING": "STR", "BOOLEAN": "BOOLEAN"}
+    vm_type = type_map.get(type_word, "")
+    if type_word == "BOOLEAN":
+        val = "True" if arg2 == "TRUE" else ("False" if arg2 == "FALSE" else arg2)
+        return _stmt(ln, f"{call}{_args(_q(vm_type), _q(arg1), val)}")
+    if type_word == "STRING":
+        return _stmt(ln, f"{call}{_args(_q(vm_type), _q(arg1), _q(arg2))}")
+    # INTEGER
+    return _stmt(ln, f"{call}{_args(_q(vm_type), _q(arg1), arg2)}")
+
+
+# -- NEW: list / condition -------------------------------------------------
+
+def _new(type_word: str, arg1: str, arg2: str, ln: int) -> str:
+    call = "add_local_var" if _in_function else "add_var"
+    if type_word == "LIST":
+        return _stmt(ln, f"{call}{_args(_q('LIST'), _q(arg1), int(arg2))}")
+    # CONDITION
+    call_c = "add_local_cond" if _in_function else "add_cond"
+    return _stmt(ln, f"{call_c}{_args(_q(arg1), _q(arg2))}")
+
+
+# -- SET: assignment / index / condition sides -----------------------------
+
+def _set(type_word: str, arg1: str, arg2: str, ln: int) -> str:
+    if type_word == "INTEGER":
+        return _stmt(ln, f"vm_assign_int{_args(_q(arg1), _q(arg2))}")
+    if type_word == "STRING":
+        return _stmt(ln, f"vm_assign_str{_args(_q(arg1), _q(arg2))}")
+    if type_word == "LIST":
+        return _stmt(ln, f"vm_assign_list{_args(_q(arg1), _q(arg2))}")
+    if type_word == "INDEX":
+        return _stmt(ln, f"get_var('LIST',{_q(arg1)}).change_index({int(arg2)})")
+    if type_word == "LEFT":
+        return _stmt(ln, f"get_cond({_q(arg1)}).set_left({_gv('INT', arg2)})")
+    if type_word == "RIGHT":
+        return _stmt(ln, f"get_cond({_q(arg1)}).set_right({_gv('INT', arg2)})")
+    return ""
+
+
+# -- CHANGE ----------------------------------------------------------------
+
+def _change(type_word: str, arg1: str, arg2: str, ln: int) -> str:
+    # Only COMPARE for now
+    return _stmt(ln, f"get_cond({_q(arg1)}).set_compare({_q(arg2)})")
+
+
+# -- Control flow ----------------------------------------------------------
+
+def _while(type_word: str, arg1: str, arg2: str, ln: int) -> str:
+    _indent_changes[ln + 1] = 1
+    _indent_changes[int(arg2) + 1] = -1
+    if type_word == "CONDITION":
+        guard = f"set_current_line({ln}) and get_cond({_q(arg1)}).evaluate() and tick_line()"
+    else:  # BOOLEAN
+        guard = f"set_current_line({ln}) and get_var('BOOLEAN',{_q(arg1)}).read() and tick_line()"
+    return f"while( {guard} ):"
+
+
+def _if(type_word: str, arg1: str, arg2: str, ln: int) -> str:
+    _indent_changes[ln + 1] = 1
+    _indent_changes[int(arg2) + 1] = -1
+    if type_word == "CONDITION":
+        guard = f"set_current_line({ln}) and get_cond({_q(arg1)}).evaluate() and tick_line()"
     else:
-        declarestr = "addvar" + inparan
-    stri = "line(" + str(linenum) + ")" + "; " + declarestr + "; " + lineupdate
-    return stri
+        guard = f"set_current_line({ln}) and get_var('BOOLEAN',{_q(arg1)}).read() and tick_line()"
+    return f"if( {guard} ):"
 
 
-def MAKESTR(name, value, linenum):
-    global infunction
-    inparan = makeparenthasis(['"STR"', tostri(name), "'" + str(value) + "'"])
-    if (infunction):
-        declarestr = "addlocalvar" + inparan
+def _elif(type_word: str, arg1: str, arg2: str, ln: int) -> str:
+    _indent_changes[ln + 1] = 1
+    _indent_changes[int(arg2) + 1] = -1
+    if type_word == "CONDITION":
+        guard = f"set_current_line({ln}) and get_cond({_q(arg1)}).evaluate() and tick_line()"
     else:
-        declarestr = "addvar" + inparan
-    stri = "line(" + str(linenum) + ")" + "; " + declarestr + "; " + lineupdate
-    return stri
-
-
-def MAKEBOOLEAN(name, value, linenum):
-    global infunction
-    if value == "TRUE":
-        value = "True"
-    elif value == "FALSE":
-        value = "False"
-    inparan = makeparenthasis(['"BOOLEAN"', tostri(name), value])
-    if (infunction):
-        declarestr = "addlocalvar" + inparan
-    else:
-        declarestr = "addvar" + inparan
-    stri = "line(" + str(linenum) + ")" + "; " + declarestr + "; " + lineupdate
-    return stri
-
-
-
-def NEWLIST(name, value, linenum):
-    global infunction
-    # value is already a plain integer string (e.g. '6') resolved at compile time
-    inparan = makeparenthasis(['"LIST"', tostri(name), str(int(value))])
-    if (infunction):
-        declarestr = "addlocalvar" + inparan
-    else:
-        declarestr = "addvar" + inparan
-    stri = "line(" + str(linenum) + ")" + "; " + declarestr + "; " + lineupdate
-    return stri
-
-
-def BASICCONDITION(name, compare, linenum):
-    global infunction
-    if (infunction == False):
-        declarestr = "addcond" + makeparenthasis([tostri(name), tostri(compare)])
-    else:
-        declarestr = "addlocalcond" + makeparenthasis([tostri(name), tostri(compare)])
-
-    stri = "line(" + str(linenum) + ")" + "; " + declarestr + "; " + lineupdate
-    return stri
-
-
-def LEFTSIDE(name, othername, linenum):
-    thegetvar = "getvar" + makeparenthasis(['"INT"', tostri(othername)])
-    stri = "line(" + str(linenum) + ")" + "; " + \
-           "getcond" + makeparenthasis([tostri(name)]) + ".changeleft(" + thegetvar + ")" + "; " + lineupdate
-
-    return (stri)
-
-
-def RIGHTSIDE(name, othername, linenum):
-    thegetvar = "getvar" + makeparenthasis(['"INT"', tostri(othername)])
-    stri = "line(" + str(linenum) + ")" + "; " + \
-           "getcond" + makeparenthasis([tostri(name)]) + ".changeright(" + thegetvar + ")" + "; " + lineupdate
-    return (stri)
-
-
-def CHANGECOMPARE(name, valuecompare, linenum):
-    stri = "line(" + str(linenum) + ")" + "; " + \
-           "getcond" + makeparenthasis([tostri(name)]) + ".changecompare(" + tostri(
-        valuecompare) + ")" + "; " + lineupdate
-    return (stri)
-
-
-def WHILE(compare, endline, linenum):
-    global listofindentchanges
-    lineofwhile = "while" + makeparenthasis(["line(" + str(linenum) + ") and " + (
-            "getcond" + makeparenthasis([tostri(compare)])) + ".giveresult() and endline()"]) + ":"
-    listofindentchanges[linenum + 1] = 1
-    listofindentchanges[int(endline) + 1] = -1
-    return (lineofwhile)
-
-
-def ITERATE(listi, endline, linenum):
-    global listofindentchanges
-    lineofwhile = "for i in join" + makeparenthasis(["getvar('LIST'," + tostri(listi) + ")", str(linenum)]) + ":"
-    listofindentchanges[linenum + 1] = 1
-    listofindentchanges[int(endline) + 1] = -1
-    return lineofwhile
-
-
-def COMPARE(compare, endline, linenum):
-    global listofindentchanges
-    lineofwhile = "if" + makeparenthasis(["line(" + str(linenum) + ") and " + (
-            "getcond" + makeparenthasis([tostri(compare)])) + ".giveresult() and endline()"]) + ":"
-    listofindentchanges[linenum + 1] = 1
-    listofindentchanges[int(endline) + 1] = -1
-    return (lineofwhile)
-
-
-def ELSECOMPARE(compare, endline, linenum):
-    global listofindentchanges
-    lineofwhile = "elif" + makeparenthasis(["line(" + str(linenum) + ") and " + (
-            "getcond" + makeparenthasis([tostri(compare)])) + ".giveresult() and endline()"]) + ":"
-    listofindentchanges[linenum + 1] = 1
-    listofindentchanges[int(endline) + 1] = -1
-    return (lineofwhile)
-
-
-def WHILETRUE(bool, endline, linenum):
-    global listofindentchanges
-    lineofwhile = "while" + makeparenthasis(["line(" + str(linenum) + ") and " + (
-            "getvar('BOOLEAN'," + tostri(bool) + ").read() " + "and endline()")]) + ":"
-    listofindentchanges[linenum + 1] = 1
-    listofindentchanges[int(endline) + 1] = -1
-    return (lineofwhile)
+        guard = f"set_current_line({ln}) and get_var('BOOLEAN',{_q(arg1)}).read() and tick_line()"
+    return f"elif( {guard} ):"
 
-
-def IFTRUE(bool, endline, linenum):
-    global listofindentchanges
-    lineofwhile = "if" + makeparenthasis(["line(" + str(linenum) + ") and " + (
-            "getvar('BOOLEAN'," + tostri(bool) + ").read() " + "and endline()")]) + ":"
-    listofindentchanges[linenum + 1] = 1
-    listofindentchanges[int(endline) + 1] = -1
-    return (lineofwhile)
 
+def _iterate(type_word: str, arg1: str, arg2: str, ln: int) -> str:
+    _indent_changes[ln + 1] = 1
+    _indent_changes[int(arg2) + 1] = -1
+    return f"for i in vm_loop_list({_gv('LIST', arg1)}, {ln}):"
 
-def ELSEIF(bool, endline, linenum):
-    global listofindentchanges
-    lineofwhile = "elif" + makeparenthasis(["line(" + str(linenum) + ") and " + (
-            "getvar('BOOLEAN'," + tostri(bool) + ").read() " + "and endline()")]) + ":"
-    listofindentchanges[linenum + 1] = 1
-    listofindentchanges[int(endline) + 1] = -1
-    return (lineofwhile)
 
+# -- PRINT -----------------------------------------------------------------
 
-def INTEGERFUNCTION(name, type, linenum):
-    global thetype, infunction
-    infunction = True
-    thetype = "INT"
-    listofindentchanges[linenum + 1] = 1
-    return "def " + name + "" + '():'
+def _print(type_word: str, arg1: str, arg2: str, ln: int) -> str:
+    vm_type = "STR" if type_word == "STRING" else "INT"
+    newline = "True" if arg2 == "BREAK" else "False"
+    return _stmt(ln, f"vm_print(get_var({_q(vm_type)},{_q(arg1)}),{newline})")
 
 
-def STRINGFUNCTION(name, type, linenum):
-    global thetype, infunction
-    infunction = True
-    thetype = "STR"
-    listofindentchanges[linenum + 1] = 1
-    return "def " + name + "" + '():'
+# -- GET: read from list ---------------------------------------------------
 
+_GET_TYPE_MAP = {"INTEGER": "INT", "STRING": "STR", "BOOLEAN": "BOOLEAN", "LIST": "LIST"}
 
-def LISTFUNCTION(name, type, linenum):
-    global thetype, infunction
-    infunction = True
-    thetype = "LIST"
-    listofindentchanges[linenum + 1] = 1
-    return "def " + name + "" + '():'
 
+def _get(type_word: str, arg1: str, arg2: str, ln: int) -> str:
+    if type_word == "TYPE":
+        return _stmt(ln, f"get_var('STR',{_q(arg2)}).write(get_var('LIST',{_q(arg1)}).read_type())")
+    if type_word == "LENGTH":
+        return _stmt(ln, f"get_var('INT',{_q(arg2)}).write(get_var('LIST',{_q(arg1)}).get_size())")
+    vm = _GET_TYPE_MAP[type_word]
+    return _stmt(ln, f"get_var({_q(vm)},{_q(arg2)}).copy_var(get_var('LIST',{_q(arg1)}).read())")
 
-def RETURN(name, stay, linenum):
-    if (stay == "BREAK"):
-        listofindentchanges[linenum + 1] = -1
-        global infunction
-        infunction = False
-    return ("line(" + str(linenum) + "); " + "return(updatelineexitingcall" + makeparenthasis(
-        [tostri(thetype), tostri(name)]) + ")")
 
+# -- WRITE: write to list --------------------------------------------------
 
-def PRINTSTRING(name, state, linenum):
-    if (state == "BREAK"):
-        state = "True"
-    else:
-        state = "False"
-    return "line(" + str(linenum) + "); " + "Print(" + "getvar('STR'," + tostri(name) + ")," + state + "); " + "endline()"
+_WRITE_TYPE_MAP = {"INTEGER": "INT", "STRING": "STR", "BOOLEAN": "BOOLEAN", "LIST": "LIST"}
 
 
-def PRINTINTEGER(name, state, linenum):
-    if (state == "BREAK"):
-        state = "True"
-    else:
-        state = "False"
-    return "line(" + str(linenum) + "); " + "Print(" + "getvar('INT'," + tostri(
-        name) + ")," + state + "); " + "endline()"
+def _write(type_word: str, arg1: str, arg2: str, ln: int) -> str:
+    vm = _WRITE_TYPE_MAP[type_word]
+    return _stmt(ln, f"get_var('LIST',{_q(arg1)}).place_value({_q(arg2)},\"{vm}\")")
 
 
-def SETINDEX(name, index, linenum):
-    # index is already a plain integer string resolved at compile time
-    return ("line(" + str(linenum) + "); getvar('LIST'," + tostri(name) + ").changeindex(" + str(int(index)) + "); endline()")
+# -- ADD (dual purpose: list resize / arithmetic with explicit dest) --------
 
+def _add(dest: str, src1: str, src2: str, ln: int) -> str:
+    if dest == "SIZE":
+        # ADD SIZE listname int_amount  (list resize — dest is literally "SIZE")
+        return _stmt(ln, f"vm_list_grow{_args(_q(src1), _q(src2))}")
+    # ADD DEST SRC1 SRC2
+    return _stmt(ln, f"vm_add_to{_args(_q(dest), _q(src1), _q(src2))}")
 
-def GETSTRING(listname, name, linenum):
-    name = tostri(name)
-    listname = tostri(listname)
-    return ("line(" + str(
-        linenum) + ");getvar('STR'," + name + ").copyvar(getvar('LIST'," + listname + ").read()); endline()")
 
+# -- Arithmetic verbs — all take (dest, src1, src2, ln) --------------------
 
-def GETINTEGER(listname, name, linenum):
-    name = tostri(name)
-    listname = tostri(listname)
-    return ("line(" + str(
-        linenum) + ");getvar('INT'," + name + ").copyvar(getvar('LIST'," + listname + ").read()); endline()")
+def _subtract(dest: str, src1: str, src2: str, ln: int) -> str:
+    return _stmt(ln, f"vm_sub_to{_args(_q(dest), _q(src1), _q(src2))}")
 
 
-def GETLIST(listname, name, linenum):
-    name = tostri(name)
-    listname = tostri(listname)
-    return ("line(" + str(
-        linenum) + ");getvar('LIST'," + name + ").copyvar(getvar('LIST'," + listname + ").read()); endline()")
+def _multiply(dest: str, src1: str, src2: str, ln: int) -> str:
+    return _stmt(ln, f"vm_mul_to{_args(_q(dest), _q(src1), _q(src2))}")
 
 
-def GETBOOL(listname, name, linenum):
-    name = tostri(name)
-    listname = tostri(listname)
-    return ("line(" + str(
-        linenum) + ");getvar('BOOLEAN'," + name + ").copyvar(getvar('LIST'," + listname + ").read()); endline()")
+def _divide(dest: str, src1: str, src2: str, ln: int) -> str:
+    return _stmt(ln, f"vm_float_div_to{_args(_q(dest), _q(src1), _q(src2))}")
 
 
-def WRITESTRING(listname, name, linenum):
-    name = tostri(name)
-    listname = tostri(listname)
-    return ("line(" + str(linenum) + ");getvar('LIST'," + listname + ") .placevalue(" + name + ',"STR"'"); endline()")
+def _simpledivide(dest: str, src1: str, src2: str, ln: int) -> str:
+    return _stmt(ln, f"vm_div_to{_args(_q(dest), _q(src1), _q(src2))}")
 
 
-def WRITEINTEGER(listname, name, linenum):
-    name = tostri(name)
-    listname = tostri(listname)
-    return ("line(" + str(linenum) + ");getvar('LIST'," + listname + ") .placevalue(" + name + ',"INT"'"); endline()")
+def _modulo(dest: str, src1: str, src2: str, ln: int) -> str:
+    return _stmt(ln, f"vm_mod_to{_args(_q(dest), _q(src1), _q(src2))}")
 
 
-def WRITEBOOL(listname, name, linenum):
-    name = tostri(name)
-    listname = tostri(listname)
-    return ("line(" + str(
-        linenum) + ");getvar('LIST'," + listname + ") .placevalue(" + name + ',"BOOLEAN"'"); endline()")
+def _power(dest: str, src1: str, src2: str, ln: int) -> str:
+    return _stmt(ln, f"vm_pow_to{_args(_q(dest), _q(src1), _q(src2))}")
 
 
-def WRITELIST(listname, name, linenum):
-    name = tostri(name)
-    listname = tostri(listname)
-    return ("line(" + str(linenum) + ");getvar('LIST'," + listname + ") .placevalue(" + name + ',"LIST"'"); endline()")
+def _combine(dest: str, src1: str, src2: str, ln: int) -> str:
+    return _stmt(ln, f"vm_concat_to{_args(_q(dest), _q(src1), _q(src2))}")
 
 
-def GETTYPE(listname, strname, linenum):
-    strname = tostri(strname)
-    listname = tostri(listname)
-    return ("line(" + str(
-        linenum) + ");getvar('STR'," + strname + ").write(getvar('LIST'," + listname + ").returntype()); endline()")
+# -- PAD -------------------------------------------------------------------
 
+def _pad(type_word: str, arg1: str, arg2: str, ln: int) -> str:
+    return _stmt(ln, f"vm_pad_str{_args(_q(arg1), arg2)}")
 
-def LENGTH(listname, intname, linenum):
-    intname = tostri(intname)
-    listname = tostri(listname)
-    return ("line(" + str(
-        linenum) + ");getvar('INT'," + intname + ").write(getvar('LIST'," + listname + ").getsize()); endline()")
 
+# -- TYPE ------------------------------------------------------------------
 
-def ADDVALUES(vali, vali2, linenum):
-    return ("line(" + str(linenum) + "); " + "add" + makeparenthasis([tostri(vali), tostri(vali2)]) + "; endline()")
+def _type(type_word: str, arg1: str, arg2: str, ln: int) -> str:
+    return _stmt(ln, f"vm_type_to_int{_args(_q(arg1), _q(arg2))}")
 
 
-def MULTIPLY(vali, vali2, linenum):
-    return ("line(" + str(linenum) + "); " + "mult" + makeparenthasis([tostri(vali), tostri(vali2)]) + "; endline()")
+# -- FUNCTION: define ------------------------------------------------------
 
-
-def MATHPOW(vali, vali2, linenum):
-    return ("line(" + str(linenum) + "); " + "pow" + makeparenthasis([tostri(vali), tostri(vali2)]) + "; endline()")
-
-
-def DIVIDE(vali, vali2, linenum):
-    return ("line(" + str(linenum) + "); " + "betterdiv" + makeparenthasis(
-        [tostri(vali), tostri(vali2)]) + "; endline()")
-
-
-def SIMPLEDIVIDE(vali, vali2, linenum):
-    return ("line(" + str(linenum) + "); " + "div" + makeparenthasis([tostri(vali), tostri(vali2)]) + "; endline()")
-
-
-def SUBTRACT(vali, vali2, linenum):
-    return ("line(" + str(linenum) + "); " + "dec" + makeparenthasis([tostri(vali), tostri(vali2)]) + "; endline()")
-
-
-def MODULO(vali, vali2, linenum):
-    return ("line(" + str(linenum) + "); " + "mod" + makeparenthasis([tostri(vali), tostri(vali2)]) + "; endline()")
-
-
-def COMBINE(vali, vali2, linenum):
-    return ("line(" + str(linenum) + "); " + "comb" + makeparenthasis([tostri(vali), tostri(vali2)]) + "; endline()")
-
-
-def ADDSIZE(vali, vali2, linenum):
-    return ("line(" + str(linenum) + "); " + "addsize" + makeparenthasis([tostri(vali), tostri(vali2)]) + "; endline()")
-
-
-def ASSSIGNINT(vali, vali2, linenum):
-    return ("line(" + str(linenum) + "); " + "assignint" + makeparenthasis(
-        [tostri(vali), tostri(vali2)]) + "; endline()")
-
-
-def STRINGASSIGN(vali, vali2, linenum):
-    return ("line(" + str(linenum) + "); " + "assignstr" + makeparenthasis(
-        [tostri(vali), tostri(vali2)]) + "; endline()")
-
-
-def COPYLIST(vali, vali2, linenum):
-    return ("line(" + str(linenum) + "); " + "assignlist" + makeparenthasis(
-        [tostri(vali), tostri(vali2)]) + "; endline()")
-
-
-def BLANKSPACES(vali, vali2, linenum):
-    return ("line(" + str(linenum) + "); " + "blankspaces" + makeparenthasis([tostri(vali), vali2]) + "; endline()")
-
-
-def TYPETOINT(vali, vali2, linenum):
-    return ("line(" + str(linenum) + "); " + "typetoint" + makeparenthasis(
-        [tostri(vali), tostri(vali2)]) + "; endline()")
-
-
-dictofinstructions["MAKEINTEGER"] = MAKEINTEGER
-dictofinstructions["MAKESTR"] = MAKESTR
-dictofinstructions["MAKEBOOLEAN"] = MAKEBOOLEAN
-dictofinstructions["NEWLIST"] = NEWLIST
-dictofinstructions["BASICCONDITION"] = BASICCONDITION
-dictofinstructions["LEFTSIDE"] = LEFTSIDE
-dictofinstructions["RIGHTSIDE"] = RIGHTSIDE
-dictofinstructions["CHANGECOMPARE"] = CHANGECOMPARE
-dictofinstructions["WHILE"] = WHILE
-dictofinstructions["ITERATE"] = ITERATE
-dictofinstructions["COMPARE"] = COMPARE
-dictofinstructions["ELSECOMPARE"] = ELSECOMPARE
-dictofinstructions["WHILETRUE"] = WHILETRUE
-dictofinstructions["IFTRUE"] = IFTRUE
-dictofinstructions["ELSEIF"] = ELSEIF
-dictofinstructions["SETINDEX"] = SETINDEX
-dictofinstructions["INTEGERFUNCTION"] = INTEGERFUNCTION
-dictofinstructions["STRINGFUNCTION"] = STRINGFUNCTION
-dictofinstructions["LISTFUNCTION"] = LISTFUNCTION
-dictofinstructions["PRINTSTRING"] = PRINTSTRING
-dictofinstructions["PRINTINTEGER"] = PRINTINTEGER
-dictofinstructions["GETSTRING"] = GETSTRING
-dictofinstructions["GETINTEGER"] = GETINTEGER
-dictofinstructions["GETLIST"] = GETLIST
-dictofinstructions["GETBOOL"] = GETBOOL
-dictofinstructions["WRITESTRING"] = WRITESTRING
-dictofinstructions["WRITEINTEGER"] = WRITEINTEGER
-dictofinstructions["WRITEBOOL"] = WRITEBOOL
-dictofinstructions["WRITELIST"] = WRITELIST
-dictofinstructions["GETTYPE"] = GETTYPE
-dictofinstructions["LENGTH"] = LENGTH
-dictofinstructions["ASSSIGNINT"] = ASSSIGNINT
-dictofinstructions["ADDSIZE"] = ADDSIZE
-dictofinstructions["STRINGASSIGN"] = STRINGASSIGN
-dictofinstructions["COPYLIST"] = COPYLIST
-dictofinstructions["ADDVALUES"] = ADDVALUES
-dictofinstructions["MULTIPLY"] = MULTIPLY
-dictofinstructions["MATHPOW"] = MATHPOW
-dictofinstructions["DIVIDE"] = DIVIDE
-dictofinstructions["SIMPLEDIVIDE"] = SIMPLEDIVIDE
-dictofinstructions["SUBTRACT"] = SUBTRACT
-dictofinstructions["MODULO"] = MODULO
-dictofinstructions["COMBINE"] = COMBINE
-dictofinstructions["BLANKSPACES"] = BLANKSPACES
-dictofinstructions["RETURN"] = RETURN
-dictofinstructions["TYPETOINT"] = TYPETOINT
-
-
-
-def makepredict(listi, i):
-    if listi[0] in dictofinstructions:
-        return dictofinstructions[listi[0]](listi[1], listi[2], i)
-    else:
-        listfun = listfunctionswithtypes[listi[0]]
-        return ("updatelinewithcall" + makeparenthasis(
-            [tostri(listfun[1]), tostri(listi[1]), listi[0], tostri(listfun[2]), tostri(listi[2]), i]))
-
-
-def makepyfile(listi):
+def _function(type_word: str, arg1: str, arg2: str, ln: int) -> str:
+    global _in_function, _current_return_type
+    _in_function = True
+    type_map = {"INTEGER": "INT", "STRING": "STR", "LIST": "LIST"}
+    _current_return_type = type_map.get(type_word, "INT")
+    _indent_changes[ln + 1] = 1
+    return f"def {arg1}():"
+
+
+# -- RETURN ----------------------------------------------------------------
+
+def _return(type_word: str, arg1: str, arg2: str, ln: int) -> str:
+    global _in_function
+    if arg2 == "BREAK":
+        _indent_changes[ln + 1] = -1
+        _in_function = False
+    return f"set_current_line({ln}); return(exit_function_call({_q(_current_return_type)}, {_q(arg1)}))"
+
+
+# -- CALL: user-defined function -------------------------------------------
+
+def _call(type_word: str, arg1: str, arg2: str, ln: int) -> str:
+    # type_word = function name, arg1 = input var, arg2 = output var
+    func_name = type_word
+    spec = _user_functions.get(func_name)
+    if spec:
+        return (
+            f"enter_function_call"
+            f"({_q(spec[1])}, {_q(arg1)}, {func_name}, {_q(spec[2])}, {_q(arg2)}, {ln})"
+        )
+    # Fallback — shouldn't happen if ErrorCorrection registered all functions
+    return f"enter_function_call('INT', {_q(arg1)}, {func_name}, 'INT', {_q(arg2)}, {ln})"
+
+
+# ---------------------------------------------------------------------------
+# Dispatch table — keyed by VERB
+# ---------------------------------------------------------------------------
+
+_DISPATCH: Dict[str, Callable[[str, str, str, int], str]] = {
+    "MAKE":         _make,
+    "NEW":          _new,
+    "SET":          _set,
+    "CHANGE":       _change,
+    "WHILE":        _while,
+    "IF":           _if,
+    "ELIF":         _elif,
+    "ITERATE":      _iterate,
+    "PRINT":        _print,
+    "GET":          _get,
+    "WRITE":        _write,
+    "ADD":          _add,
+    "SUBTRACT":     _subtract,
+    "MULTIPLY":     _multiply,
+    "DIVIDE":       _divide,
+    "SIMPLEDIVIDE": _simpledivide,
+    "MODULO":       _modulo,
+    "POWER":        _power,
+    "COMBINE":      _combine,
+    "PAD":          _pad,
+    "TYPE":         _type,
+    "FUNCTION":     _function,
+    "RETURN":       _return,
+    "CALL":         _call,
+}
+
+
+# ---------------------------------------------------------------------------
+# Code generation
+# ---------------------------------------------------------------------------
+
+def make_instruction(quad: List[str], line_num: int) -> str:
+    """Dispatch a 4-word bytecode tuple to its code-gen handler."""
+    verb = quad[0]
+    handler = _DISPATCH.get(verb)
+    if handler:
+        return handler(quad[1], quad[2], quad[3], line_num)
+    # Unknown verb — treat as user-defined function call
+    return _call(verb, quad[1], quad[2], line_num)
+
+
+def make_py_file(instruction_list: List[List[str]]) -> None:
+    """Compile *instruction_list* to Python and write it to test.py."""
     from pathlib import Path
 
-    outfile = Path(__file__).parent / "test.py"
-    with outfile.open("w+", encoding="utf-8") as f:
+    out_path = Path(__file__).parent / "test.py"
+    indent_unit = "    "
+
+    with out_path.open("w", encoding="utf-8") as f:
+        f.write("import sys\nimport os\n")
+        f.write("sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))\n")
         f.write("from Tzefa_Language.createdpython import *\n")
-        counterindent = 0
-        indent = "    "
-        for i in range(1, len(listi) + 1):
-            counterindent += listofindentchanges[i]
-            f.write(indent * counterindent + makepredict(listi[i - 1], i) + '\n')
-        f.write("printvars()")
+        f.write("print('VM TEST START')\n")
+
+        indent_level = 0
+        for i, quad in enumerate(instruction_list, start=1):
+            indent_level += _indent_changes[i]
+            f.write(indent_unit * indent_level + make_instruction(quad, i) + "\n")
+
+        f.write("print_vars()\nprint('VM TEST END')\n")
 
 
+# ---------------------------------------------------------------------------
+# Self-test
+# ---------------------------------------------------------------------------
 
+if __name__ == "__main__":
+    register_user_function("GREATESTDIV", "LIST", "LIST")
+    _sample = [
+        ["MAKE",     "INTEGER",   "THEINT",        "2769"],
+        ["MAKE",     "INTEGER",   "THEINTI",       "1065"],
+        ["MAKE",     "INTEGER",   "THROWONE",      "1065"],
+        ["MAKE",     "INTEGER",   "THROWTWO",      "1065"],
+        ["NEW",      "LIST",      "LISTOFTWO",     "2"],
+        ["SET",      "INDEX",     "LISTOFTWO",     "0"],
+        ["WRITE",    "INTEGER",   "LISTOFTWO",     "THEINT"],
+        ["SET",      "INDEX",     "LISTOFTWO",     "1"],
+        ["WRITE",    "INTEGER",   "LISTOFTWO",     "THEINTI"],
+        ["MAKE",     "INTEGER",   "ZERO",          "0"],
+        ["ADD",      "TEMPORARY", "THEINT",        "THEINTI"],  # DEST=TEMPORARY (3-word compat)
+        ["PRINT",    "INTEGER",   "TEMPORARY",     "BREAK"],
+        ["FUNCTION", "LIST",      "GREATESTDIV",   "LIST"],
+        ["SET",      "INDEX",     "LISTOFTWO",     "0"],
+        ["GET",      "INTEGER",   "LISTOFTWO",     "THROWONE"],
+        ["SET",      "INDEX",     "LISTOFTWO",     "1"],
+        ["GET",      "INTEGER",   "LISTOFTWO",     "THROWTWO"],
+        ["NEW",      "CONDITION", "EUCLIDCOMPARE", "EQUALS"],
+        ["SET",      "LEFT",      "EUCLIDCOMPARE", "THROWTWO"],
+        ["SET",      "RIGHT",     "EUCLIDCOMPARE", "ZERO"],
+        ["IF",       "CONDITION", "EUCLIDCOMPARE", "23"],
+        ["WRITE",    "INTEGER",   "LISTOFTWO",     "THROWTWO"],
+        ["RETURN",   "VALUE",     "LISTOFTWO",     "STAY"],
+        ["SET",      "RIGHT",     "EUCLIDCOMPARE", "THROWTWO"],
+        ["SET",      "INDEX",     "LISTOFTWO",     "0"],
+        ["WRITE",    "INTEGER",   "LISTOFTWO",     "THROWTWO"],
+        ["MODULO",   "TEMPORARY", "THROWONE",      "THROWTWO"],  # DEST=TEMPORARY
+        ["SET",      "INDEX",     "LISTOFTWO",     "1"],
+        ["WRITE",    "INTEGER",   "LISTOFTWO",     "TEMPORARY"],
+        ["CALL",     "GREATESTDIV","LISTOFTWO",    "LISTOFTWO"],
+        ["RETURN",   "VALUE",     "LISTOFTWO",     "BREAK"],
+        ["CALL",     "GREATESTDIV","LISTOFTWO",    "LISTOFTWO"],
+    ]
+    make_py_file(_sample)
 
-if __name__ == '__main__':
-    listi = [["MAKEINTEGER", "THEINT", '2769'], ["MAKEINTEGER", "THEINTI", '1065'], ["MAKEINTEGER", "THROWONE", '1065'],
-             ["MAKEINTEGER", "THROWTWO", '1065'], ["NEWLIST", "LISTOFTWO", '2'], ["SETINDEX", "LISTOFTWO", '0'],
-             ["WRITEINTEGER", "LISTOFTWO", 'THEINT'], ["SETINDEX", "LISTOFTWO", '1'],
-             ["WRITEINTEGER", "LISTOFTWO", 'THEINTI'], ["MAKEINTEGER", "ZERO", '0'], ["ADDVALUES", "THEINT", 'THEINTI'],
-             ["PRINTINTEGER", "TEMPORARY", 'BREAK'], ["LISTFUNCTION", "GREATESTDIV", 'LIST'],
-             ["SETINDEX", "LISTOFTWO", '0'], ["GETINTEGER", "LISTOFTWO", 'THROWONE'], ["SETINDEX", "LISTOFTWO", '1'],
-             ["GETINTEGER", "LISTOFTWO", 'THROWTWO'], ["BASICCONDITION", "EUCLIDCOMPARE", 'EQUALS'],
-             ["LEFTSIDE", "EUCLIDCOMPARE", 'THROWTWO'], ["RIGHTSIDE", "EUCLIDCOMPARE", 'ZERO'],
-             ["COMPARE", "EUCLIDCOMPARE", '23'], ["WRITEINTEGER", "LISTOFTWO", 'THROWTWO'],
-             ["RETURN", "LISTOFTWO", "STAY"], ["RIGHTSIDE", "EUCLIDCOMPARE", 'THROWTWO']
-        , ["SETINDEX", "LISTOFTWO", '0'], ["WRITEINTEGER", "LISTOFTWO", 'THROWTWO'], ["MODULO", "THROWONE", 'THROWTWO'],
-             ["SETINDEX", "LISTOFTWO", '1'], ["WRITEINTEGER", "LISTOFTWO", 'TEMPORARY'],
-             ["GREATESTDIV", "LISTOFTWO", 'LISTOFTWO'], ["RETURN", "LISTOFTWO", 'BREAK'],
-             ["GREATESTDIV", "LISTOFTWO", 'LISTOFTWO']]
-    makepyfile(listi)

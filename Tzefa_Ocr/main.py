@@ -3,7 +3,6 @@ import gc
 import traceback
 import subprocess
 import torch
-import cv2
 import numpy as np
 from pathlib import Path
 from PIL import Image
@@ -14,8 +13,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import image_preprocessing
 import Line_Segmentation
 import Binarization
-import OCR  # Moved to top level
-from Tzefa_Language import ErrorCorrection, topy
+import OCR
+from Tzefa_Language.ErrorCorrection import TzefaParser
+from Tzefa_Language.dialects import THREE_WORD, CAPS_ONLY
+from Tzefa_Language import topy
+
 
 def clear_vram(model_ref=None):
     """Aggressively clears VRAM to prevent OOM errors."""
@@ -26,17 +28,15 @@ def clear_vram(model_ref=None):
         torch.cuda.empty_cache()
 
 
-def _reset_error_correction():
-    """Reload ErrorCorrection to reset all global state between runs."""
-    importlib.reload(ErrorCorrection)
+def _reset_topy():
+    """Reload topy to reset its module-level globals between runs."""
     importlib.reload(topy)
 
 
 def _execute_compiled_code(compiled_code: str) -> str:
     """
     Execute compiled Tzefa code in a subprocess and capture output.
-    Returns the stdout/stderr as a string. Timeout after 15 seconds
-    to prevent infinite loops from crashing the server.
+    Timeout after 15 seconds to prevent infinite loops.
     """
     project_root = str(Path(__file__).resolve().parents[1])
 
@@ -60,25 +60,27 @@ def _execute_compiled_code(compiled_code: str) -> str:
         return f"[Execution error: {e}]"
 
 
-def image_to_code_pipeline(img_array):
+def image_to_code_pipeline(
+    img_array,
+    dialect: str = THREE_WORD,
+    casing: str = CAPS_ONLY,
+):
     """
-    Runs the full Tzefa OCR pipeline and returns a dict of intermediate results.
-    Each stage is wrapped so that if it crashes, all prior results are still available.
+    Run the full Tzefa OCR pipeline and return a dict of intermediate results.
 
-    Returns dict with keys:
-        binarized_img    - np.ndarray (grayscale) or None
-        truelines        - list of (x,y,w,h) bboxes or None
-        raw_ocr_lines    - list of str (raw OCR per line) or None
-        corrected_lines  - list of str (error-corrected) or None
-        compiled_code    - str (final Python code) or None
-        execution_output - str (stdout from running the code) or None
-        error            - str description of where it crashed, or None
-        stage            - str name of last completed stage
+    Parameters
+    ----------
+    img_array : np.ndarray
+        Input image (RGB).
+    dialect : str
+        ``THREE_WORD`` or ``FOUR_WORD``.
+    casing : str
+        ``CAPS_ONLY`` or ``MIXED_CASE``.
     """
     result = {
         "binarized_img": None,
         "truelines": None,
-        "word_bboxes": None,   # list of lists: [[( text, (x1,y1,x2,y2) ), ...], ...]
+        "word_bboxes": None,
         "raw_ocr_lines": None,
         "corrected_lines": None,
         "compiled_code": None,
@@ -87,8 +89,10 @@ def image_to_code_pipeline(img_array):
         "stage": "init",
     }
 
-    # Reset global state in ErrorCorrection / topy between runs
-    _reset_error_correction()
+    # Fresh parser and topy state for every run
+    _reset_topy()
+    parser = TzefaParser(dialect=dialect, casing=casing)
+    target_words = parser.expected_words_per_line
 
     # --- STAGE 1: DL Binarization ---
     try:
@@ -119,7 +123,9 @@ def image_to_code_pipeline(img_array):
 
     # --- STAGE 3: Word Segmentation + OCR ---
     try:
-        words = image_preprocessing.linestowords(binarified_img_array, truelines)
+        words = image_preprocessing.linestowords(
+            binarified_img_array, truelines, target_words=target_words,
+        )
 
         all_lines_tuples = []
         raw_ocr_lines = []
@@ -150,17 +156,10 @@ def image_to_code_pipeline(img_array):
                 final_x2 = min(img_w, int(abs_x2))
                 final_y2 = min(img_h, int(abs_y2))
 
-                # Crop from the binarized image — same source the bboxes were
-                # computed on, and the same pixels shown in the word bbox overlay.
                 crop_array = binarified_img_array[final_y1:final_y2, final_x1:final_x2]
                 cropped_pil = Image.fromarray(crop_array)
 
-
                 recognized_text = OCR.ocr_word(cropped_pil)
-                # TrOCR can predict spaces inside a single-word crop (e.g. "BIGLY Y"
-                # instead of "BIGLY"), which inflates the token count and breaks
-                # downstream correction. Each word crop must be exactly one token.
-                # Keep the longest part — it's almost always the real word.
                 parts = recognized_text.split()
                 recognized_text = max(parts, key=len) if parts else recognized_text
                 line_tuples.append((recognized_text, (final_x1, final_y1, final_x2, final_y2)))
@@ -181,49 +180,31 @@ def image_to_code_pipeline(img_array):
         result["error"] = f"OCR failed: {e}\n{traceback.format_exc()}"
         return result
 
-    # --- STAGE 4: Error Correction ---
+    # --- STAGE 4: Error Correction + Compilation ---
     try:
-        ErrorCorrection.sendlines(len(truelines))
-        index_list = []
+        parser.init_indent_table(len(truelines))
         corrected_lines = []
+        bytecode_list = []
 
         for line_entries in all_lines_tuples:
             if not line_entries:
                 corrected_lines.append("")
-                index_list.append(0)
+                bytecode_list.append(["MAKE", "INTEGER", "TEMPORARY", "0"])  # no-op placeholder
                 continue
 
-            # Uppercase all tokens — TrOCR outputs lowercase,
-            # but the entire Tzefa vocabulary is uppercase.
-            # Pad/trim to exactly 3 tokens (command, arg1, arg2).
-            raw_tokens = [t[0].upper() for t in line_entries]
-            while len(raw_tokens) < 3:
+            # Extract raw OCR tokens and pad/trim to expected word count
+            raw_tokens = [t[0] for t in line_entries]
+            while len(raw_tokens) < target_words:
                 raw_tokens.append("")
-            raw_tokens = raw_tokens[:3]
+            raw_tokens = raw_tokens[:target_words]
 
-            # Correct the command word against the function list to get its index.
-            # All argument correction is intentionally left to toline() in Stage 5,
-            # which processes lines in order and registers new variable names into
-            # listall as it goes — so later lines can fuzzy-match those names.
-            # Doing arg correction here (before var names are registered) caused
-            # wrong fuzzy matches for user-defined variable names.
-            cleaned_first, index, _ = ErrorCorrection.handelfirstword(raw_tokens[0])
-            index_list.append(index)
+            # Normalise to canonical 4-word CAPS tuple
+            normalised = parser.normalize_source_line(raw_tokens)
+            corrected_lines.append(" ".join(normalised))
 
-            # For "new variable" declarations (simpler[1] == 0), register the raw
-            # arg1 token into the correct listall bucket right now, so that toline()
-            # in Stage 5 can match it when it encounters later lines that reference it.
-            simpler = ErrorCorrection.listsimplefunc[index]
-            if simpler[1] == 0:
-                bucket_idx = simpler[2]
-                if isinstance(bucket_idx, int) and bucket_idx < len(ErrorCorrection.listall):
-                    bucket = ErrorCorrection.listall[bucket_idx]
-                    if raw_tokens[1] and raw_tokens[1] not in bucket:
-                        bucket.append(raw_tokens[1])
-
-            # Rebuild as a clean 3-word string — toline() will do all vocab matching.
-            full_line_text = cleaned_first + " " + raw_tokens[1] + " " + raw_tokens[2]
-            corrected_lines.append(full_line_text)
+            # Parse and error-correct into validated 4-word bytecode
+            bytecode = parser.parse_line(normalised)
+            bytecode_list.append(bytecode)
 
         result["corrected_lines"] = corrected_lines
         result["stage"] = "error_correction"
@@ -233,24 +214,15 @@ def image_to_code_pipeline(img_array):
 
     # --- STAGE 5: Compilation to Python ---
     try:
-        linelist = []
-        for i in range(len(corrected_lines)):
-            current_indent = index_list[i] if i < len(index_list) else 0
-            line_obj = ErrorCorrection.toline(corrected_lines[i], current_indent, ErrorCorrection.giveindents())
-            linelist.append(line_obj)
-
-        listfunctions_out, listezfunctions_out = ErrorCorrection.giveinstructions()
-        topy.getinstructions(listfunctions_out, listezfunctions_out)
-
-        # Instead of writing to file, capture the code as a string
-        compiled_lines = []
-        compiled_lines.append("from Tzefa_Language.createdpython import *")
-        counterindent = 0
-        indent = "    "
-        for i in range(1, len(linelist) + 1):
-            counterindent += topy.listofindentchanges[i]
-            compiled_lines.append(indent * counterindent + topy.makepredict(linelist[i - 1], i))
-        compiled_lines.append("printvars()")
+        compiled_lines = ["from Tzefa_Language.createdpython import *"]
+        indent_level = 0
+        indent_unit = "    "
+        for i in range(1, len(bytecode_list) + 1):
+            indent_level += topy._indent_changes[i]
+            compiled_lines.append(
+                indent_unit * max(0, indent_level) + topy.make_instruction(bytecode_list[i - 1], i)
+            )
+        compiled_lines.append("print_vars()")
 
         result["compiled_code"] = "\n".join(compiled_lines)
         result["stage"] = "compilation"
@@ -273,9 +245,9 @@ def image_to_code_pipeline(img_array):
     return result
 
 
-def image_to_code(img_array, debug_mode=False):
-    """Legacy wrapper - runs the full pipeline."""
-    pipeline_result = image_to_code_pipeline(img_array)
+def image_to_code(img_array, debug_mode=False, dialect=THREE_WORD, casing=CAPS_ONLY):
+    """Legacy wrapper – runs the full pipeline."""
+    pipeline_result = image_to_code_pipeline(img_array, dialect=dialect, casing=casing)
 
     if debug_mode and pipeline_result["binarized_img"] is not None:
         Image.fromarray(pipeline_result["binarized_img"]).show()
@@ -284,7 +256,6 @@ def image_to_code(img_array, debug_mode=False):
         print(f"Pipeline error: {pipeline_result['error']}")
 
     if pipeline_result["compiled_code"]:
-        # Also write to file for backwards compat
         outfile = Path(__file__).parent.parent / "Tzefa_Language" / "test.py"
         with outfile.open("w+", encoding="utf-8") as f:
             f.write(pipeline_result["compiled_code"])
@@ -300,6 +271,7 @@ def main():
 
     img = image_preprocessing.UV_unwrap(image_path)
     image_to_code(img, debug_mode=True)
+
 
 if __name__ == '__main__':
     main()

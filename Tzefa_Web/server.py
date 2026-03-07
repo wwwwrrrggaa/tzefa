@@ -25,12 +25,17 @@ if str(ocr_dir) not in sys.path:
     sys.path.insert(0, str(ocr_dir))
 
 from Tzefa_Ocr.main import image_to_code_pipeline
+from Tzefa_Language.dialects import THREE_WORD, FOUR_WORD, CAPS_ONLY, MIXED_CASE
 
 app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = str(current_web_dir / "uploads")
 app.config["MAX_CONTENT_LENGTH"] = 50 * 1024 * 1024  # 50 MB limit
 
 os.makedirs(app.config["UPLOAD_FOLDER"], exist_ok=True)
+
+# Map form values to dialect constants
+_DIALECT_MAP = {"three_word": THREE_WORD, "four_word": FOUR_WORD}
+_CASING_MAP = {"caps_only": CAPS_ONLY, "mixed_case": MIXED_CASE}
 
 
 def numpy_to_b64_png(img_array: np.ndarray) -> str:
@@ -75,7 +80,7 @@ def draw_word_bboxes_on_image(img_array: np.ndarray, bboxes, word_bboxes) -> np.
     if word_bboxes is None:
         return vis
 
-    colors = [(50, 220, 50), (50, 180, 255), (255, 180, 50)]  # green / blue / orange per word slot
+    colors = [(50, 220, 50), (50, 180, 255), (255, 180, 50), (220, 50, 220)]  # green / blue / orange per word slot
     for line_tuples in word_bboxes:
         for w_idx, (text, (x1, y1, x2, y2)) in enumerate(line_tuples):
             color = colors[w_idx % len(colors)]
@@ -100,6 +105,10 @@ def process():
     if file.filename == "":
         return redirect(url_for("index"))
 
+    # Read dialect / casing toggles from the form
+    dialect = _DIALECT_MAP.get(request.form.get("dialect", "three_word"), THREE_WORD)
+    casing = _CASING_MAP.get(request.form.get("casing", "caps_only"), CAPS_ONLY)
+
     try:
         # Read image directly from upload into numpy
         file_bytes = file.read()
@@ -109,8 +118,8 @@ def process():
             return render_template("pipeline.html", result={"error": "Could not decode image."})
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
-        # Run pipeline
-        pipeline = image_to_code_pipeline(img_rgb)
+        # Run pipeline with the selected dialect/casing
+        pipeline = image_to_code_pipeline(img_rgb, dialect=dialect, casing=casing)
 
         # Build display data
         display = {

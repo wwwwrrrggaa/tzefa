@@ -7,9 +7,9 @@
 ## P0 — Fix Now
 
 ### VM Runtime Bugs (`createdpython.py`)
-- [ ] `makeeindexrror` called with 3 args, expects 4 (lines ~499, ~507) — crashes on list index-out-of-bounds
-- [ ] `readerror()` called with no args, expects 1 (line ~528) — crashes on unreadable variable access
-- [ ] `COND.givetype()` references `self.type` which is never set in `__init__` — AttributeError
+- [x] `makeeindexrror` called with 3 args, expects 4 (lines ~499, ~507) — crashes on list index-out-of-bounds
+- [x] `readerror()` called with no args, expects 1 (line ~528) — crashes on unreadable variable access
+- [x] `COND.givetype()` references `self.type` which is never set in `__init__` — AttributeError
 
 ### Files to Delete
 - [ ] `Tzefa_Web/app.py` — broken, imports wrong package name, fully superseded by `server.py`
@@ -40,7 +40,7 @@ The YOLO-OBB line segmentation model is the primary bottleneck. The current work
 ## P2 — Architecture Improvements
 
 ### Eliminate Global State
-- [ ] **Refactor `ErrorCorrection.py` into a class** — 15+ module-level globals (`counter`, `thetype`, `insidefunction`, `listfunctions`, `listezfunc`, `listall`, etc.) mutated during compilation. Currently requires `importlib.reload()` between web requests. One pipeline run = one class instance = clean state.
+- [x] **Refactor `ErrorCorrection.py` into a class** — 15+ module-level globals (`counter`, `thetype`, `insidefunction`, `listfunctions`, `listezfunc`, `listall`, etc.) mutated during compilation. Currently requires `importlib.reload()` between web requests. One pipeline run = one class instance = clean state.
 - [ ] **Refactor `topy.py` into a class** — same pattern. `listofindentchanges`, `infunction`, `dictofinstructions` become instance state.
 - [ ] **Add reset to `createdpython.py`** — VM state (`allthevars`, `alltheconds`, stacks) is module-level. Subprocess execution isolates this for now, but in-process re-runs get corrupt state.
 

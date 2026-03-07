@@ -24,12 +24,14 @@ def _get_word_boxes(dilated, min_word_w, min_word_h):
     return boxes
 
 
-def linestowords(binarized_img, lines_bboxes):
+def linestowords(binarized_img, lines_bboxes, target_words=None):
     """
     Small fixed kernel, repeatedly applied to the SAME image until
-    exactly 3 connected components remain.
-    A Tzefa instruction is ALWAYS 3 tokens (COMMAND ARG1 ARG2).
+    exactly *target_words* connected components remain per line.
+    Defaults to TARGET_WORDS (3) when not specified.
     """
+    if target_words is None:
+        target_words = TARGET_WORDS
     print("      Segmenting lines into words (Repeated Dilation)...")
     words_dict = {}
 
@@ -71,19 +73,19 @@ def linestowords(binarized_img, lines_bboxes):
             dilated = cv2.dilate(dilated, kernel, iterations=1)
             boxes = _get_word_boxes(dilated, min_word_w, min_word_h)
 
-            if len(boxes) == TARGET_WORDS:
+            if len(boxes) == target_words:
                 prev_boxes = boxes
                 found = True
                 break
-            elif len(boxes) < TARGET_WORDS:
-                # Overshot — use prev_boxes (last time we had >3)
+            elif len(boxes) < target_words:
+                # Overshot — use prev_boxes (last time we had more)
                 break
             else:
                 prev_boxes = boxes
 
-        if not found and prev_boxes is not None and len(prev_boxes) > TARGET_WORDS:
-            # Merge closest pairs down to 3
-            while len(prev_boxes) > TARGET_WORDS:
+        if not found and prev_boxes is not None and len(prev_boxes) > target_words:
+            # Merge closest pairs down to target_words
+            while len(prev_boxes) > target_words:
                 min_gap = float('inf')
                 merge_idx = 0
                 for j in range(len(prev_boxes) - 1):
@@ -103,8 +105,8 @@ def linestowords(binarized_img, lines_bboxes):
                 prev_boxes.pop(merge_idx + 1)
             found = True
 
-        if not found or prev_boxes is None or len(prev_boxes) != TARGET_WORDS:
-            print(f"      Line {i+1}: WARNING — got {len(prev_boxes) if prev_boxes else 0} words (expected {TARGET_WORDS}), skipping")
+        if not found or prev_boxes is None or len(prev_boxes) != target_words:
+            print(f"      Line {i+1}: WARNING — got {len(prev_boxes) if prev_boxes else 0} words (expected {target_words}), skipping")
             continue
 
         print(f"      Line {i+1}: OK — {len(prev_boxes)} words")
