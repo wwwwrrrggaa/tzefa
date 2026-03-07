@@ -47,8 +47,8 @@ _BUILTIN_INSTRUCTIONS: List[List[str]] = [
     ["MAKE",      "INTEGER",   "NEWINT",   "NUMNAME"],
     ["MAKE",      "BOOLEAN",   "NEWBOOL",  "TRUTH"],
     ["MAKE",      "STRING",    "NEWSTR",   "TEXT"],
-    ["NEW",       "LIST",      "NEWLIST",  "NUMNAME"],
-    ["NEW",       "CONDITION", "NEWCOND",  "COMPARE"],
+    ["MAKE",      "LIST",      "NEWLIST",  "NUMNAME"],
+    ["MAKE",      "CONDITION", "NEWCOND",  "COMPARE"],
 
     # Condition manipulation
     ["SET",       "LEFT",      "COND",     "INT"],
@@ -205,6 +205,22 @@ class TzefaParser:
             self.all_names[10].append(name)
             self.word_to_num[name] = str(i)
 
+        # Build verb→[valid types] lookup for sequential word matching
+        self._verb_to_types: Dict[str, List[str]] = {}
+        for row in self.instructions:
+            v, t = row[0], row[1]
+            if v not in self._verb_to_types:
+                self._verb_to_types[v] = []
+            if t not in self._verb_to_types[v]:
+                self._verb_to_types[v].append(t)
+
+        # Deduplicated verb list (order preserved, for fuzzy matching)
+        # Always include CALL even before functions are registered
+        self._verb_list: List[str] = ["CALL"]
+        for row in self.instructions:
+            if row[0] not in self._verb_list:
+                self._verb_list.append(row[0])
+
         # Indent tracking
         self.indent_table: List[int] = []
 
@@ -233,136 +249,119 @@ class TzefaParser:
         return self.indent_table
 
     def match_opcode(self, verb: str, type_word: str) -> Tuple[int, List[str]]:
-        """
-        Find the instruction row matching (verb, type_word).
-
-        For ALU verbs (ADD, SUBTRACT, etc.) the type_word slot holds the
-        destination variable name, not a keyword — so we match on verb alone.
-
-        Returns (index, instruction_row).
-        """
-        # ALU verbs: match by verb only, type_word is the dest variable
-        if verb in ALU_VERBS:
-            # Find the primary entry for this verb (first match)
-            for i, row in enumerate(self.instructions):
-                if row[0] == verb:
-                    return i, row
-            # Fuzzy-correct the verb itself
-            best_verb, _ = self.find_word([v for v in ALU_VERBS], verb, use_ocr_weights=True)
-            for i, row in enumerate(self.instructions):
-                if row[0] == best_verb:
-                    return i, row
-
-        # ADD SIZE is a special non-ALU use of ADD — check for it
-        if verb == "ADD" and type_word == "SIZE":
-            for i, row in enumerate(self.instructions):
-                if row[0] == "ADD" and row[1] == "SIZE":
-                    return i, row
-
-        # Standard exact match on (VERB, TYPE)
+        """Exact lookup of (verb, type_word) → instruction row."""
         key = (verb, type_word)
         for i, k in enumerate(self.opcode_keys):
             if k == key:
-                return i, self.instructions[i]
-
-        # Fuzzy match verb+type against bucket 7
-        combined = f"{verb}_{type_word}"
-        matched, _ = self.find_word(self.all_names[7], combined, use_ocr_weights=True)
-        parts = matched.split("_", 1)
-        key2 = (parts[0], parts[1]) if len(parts) == 2 else (parts[0], "")
-        for i, k in enumerate(self.opcode_keys):
-            if k == key2:
                 return i, self.instructions[i]
         return 0, self.instructions[0]
 
     def parse_line(self, quad: List[str]) -> List[str]:
         """
-        Error-correct and validate a 4-word bytecode tuple.
-
-        Non-ALU:  [VERB, TYPE,  ARG1, ARG2]
-        ALU:      [VERB, DEST,  SRC1, SRC2]   ← DEST is an INT variable name
-
-        Returns a clean 4-element list.
+        Sequential error-correction:
+          W1 → fuzzy match against verb list
+          W2 → fuzzy match against valid types for that verb
+               (ALU: dest var auto-registered; CALL: known function names)
+          W3,W4 → resolved by the spec (arg1_kind, arg2_kind)
         """
         while len(quad) < 4:
             quad.append("")
 
-        verb = quad[0]
+        # ── W1: verb ─────────────────────────────────────────────────────────
+        verb = self.find_word(self._verb_list, quad[0], use_ocr_weights=True)[0]
 
-        # --- ALU fast path ---
+        # ── ALU fast path (W2 = dest var, W3/W4 = sources) ──────────────────
         if verb in ALU_VERBS:
-            # ADD SIZE list amount — not an ALU op, fall through to normal path
-            if not (verb == "ADD" and quad[1] == "SIZE"):
-                if verb == "COMBINE":
-                    dest = self._resolve_arg("STR", quad[1])
-                    src1 = self._resolve_arg("STR", quad[2])
-                    src2 = self._resolve_arg("STR", quad[3])
-                else:
-                    dest = self._resolve_arg("INT", quad[1])
-                    src1 = self._resolve_arg("INT", quad[2])
-                    src2 = self._resolve_arg("INT", quad[3])
-                self.line_counter += 1
-                return [verb, dest, src1, src2]
+            # ADD SIZE is the non-ALU outlier — treat normally
+            if verb == "ADD":
+                size_types = self._verb_to_types.get("ADD", [])
+                w2 = self.find_word(size_types, quad[1], use_ocr_weights=True)[0]
+                if w2 == "SIZE":
+                    # fall through to standard path
+                    type_word = "SIZE"
+                    verb = "ADD"
+                    _, spec = self.match_opcode(verb, type_word)
+                    result = [verb, type_word,
+                              self._resolve_arg(spec[2], quad[2]),
+                              self._resolve_arg(spec[3], quad[3])]
+                    self.line_counter += 1
+                    return result
+            if verb == "COMBINE":
+                dest = self._resolve_arg("STR", quad[1])
+                src1 = self._resolve_arg("STR", quad[2])
+                src2 = self._resolve_arg("STR", quad[3])
+            else:
+                dest = self._resolve_arg("INT", quad[1])
+                src1 = self._resolve_arg("INT", quad[2])
+                src2 = self._resolve_arg("INT", quad[3])
+            self.line_counter += 1
+            return [verb, dest, src1, src2]
 
-        verb, type_word = quad[0], quad[1]
-        idx, spec = self.match_opcode(verb, type_word)
-        verb, type_word = spec[0], spec[1]
+        # ── CALL (W2 = function name, W3 = input var, W4 = output var) ───────
+        if verb == "CALL":
+            known_funcs = [k[1] for k in self.opcode_keys if k[0] == "CALL"]
+            func_name = self.find_word(known_funcs, quad[1], use_ocr_weights=True)[0] if known_funcs else quad[1]
+            func_spec = next((r for r in self.instructions if r[0] == "CALL" and r[1] == func_name), None)
+            arg1 = self._resolve_arg(func_spec[2] if func_spec else "INT", quad[2])
+            arg2 = self._resolve_arg("INT", quad[3])
+            self.line_counter += 1
+            return ["CALL", func_name, arg1, arg2]
+
+        # ── W2: type keyword for this verb ───────────────────────────────────
+        valid_types = self._verb_to_types.get(verb, [])
+        type_word = self.find_word(valid_types, quad[1], use_ocr_weights=True)[0] if valid_types else quad[1]
+
+        # ── Look up full spec ─────────────────────────────────────────────────
+        _, spec = self.match_opcode(verb, type_word)
         arg1_kind, arg2_kind = spec[2], spec[3]
 
         result = [verb, type_word, "", ""]
 
-        # -- Handle FUNCTION definitions --
+        # ── FUNCTION ─────────────────────────────────────────────────────────
         if verb == "FUNCTION":
-            if self.inside_function:
-                pass  # error: nested function
-            else:
+            if not self.inside_function:
                 self.inside_function = True
-                result[2] = quad[2]  # function name — new, don't correct
-                result[3] = self.find_word(self.all_names[6], quad[3])[0]
-                self.function_type_stack.append(result[3])
-                # Register the new function
-                vm_return = _FUNC_TYPE_MAP.get(type_word, "INT")
-                vm_input = _FUNC_TYPE_MAP.get(result[3], "INT")
-                topy.register_user_function(result[2], vm_return, vm_input)
-                # Add to opcode keys so CALL can resolve it
-                self.opcode_keys.append(("CALL", result[2]))
-                self.instructions.append(["CALL", result[2], "VALUE", "VALUE"])
-                label = f"CALL_{result[2]}"
+                func_name = quad[2]   # new name, register as-is
+                param_type = self.find_word(self.all_names[6], quad[3], use_ocr_weights=True)[0]
+                result[2] = func_name
+                result[3] = param_type
+                self.function_type_stack.append(type_word)
+                topy.register_user_function(
+                    func_name,
+                    _FUNC_TYPE_MAP.get(type_word, "INT"),
+                    _FUNC_TYPE_MAP.get(param_type, "INT"),
+                )
+                self.opcode_keys.append(("CALL", func_name))
+                self.instructions.append(["CALL", func_name, "INT", "INT"])
+                if "CALL" not in self._verb_to_types:
+                    self._verb_to_types["CALL"] = []
+                if func_name not in self._verb_to_types["CALL"]:
+                    self._verb_to_types["CALL"].append(func_name)
+                label = f"CALL_{func_name}"
                 if label not in self.all_names[7]:
                     self.all_names[7].append(label)
 
-        # -- Handle RETURN --
+        # ── RETURN ────────────────────────────────────────────────────────────
         elif verb == "RETURN":
-            if not self.function_type_stack:
-                pass  # error: return outside function
+            if self.function_type_stack:
+                ret_kind = _FUNC_TYPE_MAP.get(self.function_type_stack[-1], "INT")
+                bucket = _KIND_TO_BUCKET.get(ret_kind, 0)
+                result[2] = self.find_word(self.all_names[bucket], quad[2], use_ocr_weights=True)[0]
             else:
-                ret_type = self.function_type_stack[-1]
-                bucket_idx = _KIND_TO_BUCKET.get(
-                    _FUNC_TYPE_MAP.get(ret_type, "INT"), 0
-                )
-                result[2] = self.find_word(self.all_names[bucket_idx], quad[2])[0]
-                result[3] = self.find_word(self.all_names[5], quad[3])[0]  # STATE
-                if result[3] == "BREAK":
-                    self.inside_function = False
-                    self.function_type_stack.pop()
-                    self.indent_table[self.line_counter] = -1
+                result[2] = quad[2]
+            result[3] = self.find_word(self.all_names[5], quad[3], use_ocr_weights=True)[0]
+            if result[3] == "BREAK" and self.function_type_stack:
+                self.inside_function = False
+                self.function_type_stack.pop()
+                self.indent_table[self.line_counter] = -1
 
-        # -- Handle CALL (user-defined function) --
-        elif verb == "CALL":
-            # type_word is the function name; args are input/output vars
-            # We can't easily type-check these generically, pass through
-            result[1] = type_word
-            result[2] = quad[2]
-            result[3] = quad[3]
-
-        # -- All other instructions --
+        # ── Everything else ───────────────────────────────────────────────────
         else:
             result[2] = self._resolve_arg(arg1_kind, quad[2])
             result[3] = self._resolve_arg(arg2_kind, quad[3])
 
-        # Control flow indent tracking
-        _CONTROL_FLOW = {"WHILE", "IF", "ELIF", "ITERATE"}
-        if verb in _CONTROL_FLOW:
+        # Control-flow indent tracking
+        if verb in {"WHILE", "IF", "ELIF", "ITERATE"}:
             self.indent_table[self.line_counter] = 1
             try:
                 self.indent_table[int(result[3])] = -1
@@ -376,8 +375,9 @@ class TzefaParser:
     # Argument resolution
     # ------------------------------------------------------------------
 
+
     def _resolve_arg(self, kind: str, raw: str) -> str:
-        """Resolve a single argument against its kind's name bucket."""
+        """Resolve a single argument against its kind's name bucket via fuzzy-match."""
         if not kind or kind == "VALUE":
             return raw
 
@@ -385,20 +385,19 @@ class TzefaParser:
         if bucket_idx < 0 or bucket_idx >= len(self.all_names):
             return raw
 
-        # New-name kinds: register the raw token, don't fuzzy-correct it
+        # New-name kinds: register as-is, no correction
         if kind in _NEW_KINDS:
             if raw and raw not in self.all_names[bucket_idx]:
                 self.all_names[bucket_idx].append(raw)
             return raw
 
-        # NUMNAME: if the raw value is already a digit string, pass through
+        # NUMNAME: digit strings pass through, words get fuzzy-matched then converted
         if kind == "NUMNAME" and raw.isdigit():
             return raw
 
-        # Existing-name kinds: fuzzy-match
-        matched = self.find_word(self.all_names[bucket_idx], raw)[0]
+        # Fuzzy-match against the bucket — always, no exceptions
+        matched, _ = self.find_word(self.all_names[bucket_idx], raw, use_ocr_weights=True)
 
-        # NUMNAME: replace word with integer value
         if kind == "NUMNAME":
             matched = self.word_to_num.get(matched, matched)
 

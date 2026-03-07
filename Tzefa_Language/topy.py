@@ -76,26 +76,19 @@ def get_user_functions() -> Dict[str, List[str]]:
 
 def _make(type_word: str, arg1: str, arg2: str, ln: int) -> str:
     call = "add_local_var" if _in_function else "add_var"
-    type_map = {"INTEGER": "INT", "STRING": "STR", "BOOLEAN": "BOOLEAN"}
-    vm_type = type_map.get(type_word, "")
+    call_c = "add_local_cond" if _in_function else "add_cond"
     if type_word == "BOOLEAN":
         val = "True" if arg2 == "TRUE" else ("False" if arg2 == "FALSE" else arg2)
-        return _stmt(ln, f"{call}{_args(_q(vm_type), _q(arg1), val)}")
+        return _stmt(ln, f"{call}{_args(_q('BOOLEAN'), _q(arg1), val)}")
     if type_word == "STRING":
-        return _stmt(ln, f"{call}{_args(_q(vm_type), _q(arg1), _q(arg2))}")
-    # INTEGER
-    return _stmt(ln, f"{call}{_args(_q(vm_type), _q(arg1), arg2)}")
-
-
-# -- NEW: list / condition -------------------------------------------------
-
-def _new(type_word: str, arg1: str, arg2: str, ln: int) -> str:
-    call = "add_local_var" if _in_function else "add_var"
+        return _stmt(ln, f"{call}{_args(_q('STR'), _q(arg1), _q(arg2))}")
+    if type_word == "INTEGER":
+        return _stmt(ln, f"{call}{_args(_q('INT'), _q(arg1), arg2)}")
     if type_word == "LIST":
         return _stmt(ln, f"{call}{_args(_q('LIST'), _q(arg1), int(arg2))}")
-    # CONDITION
-    call_c = "add_local_cond" if _in_function else "add_cond"
-    return _stmt(ln, f"{call_c}{_args(_q(arg1), _q(arg2))}")
+    if type_word == "CONDITION":
+        return _stmt(ln, f"{call_c}{_args(_q(arg1), _q(arg2))}")
+    return ""
 
 
 # -- SET: assignment / index / condition sides -----------------------------
@@ -287,7 +280,6 @@ def _call(type_word: str, arg1: str, arg2: str, ln: int) -> str:
 
 _DISPATCH: Dict[str, Callable[[str, str, str, int], str]] = {
     "MAKE":         _make,
-    "NEW":          _new,
     "SET":          _set,
     "CHANGE":       _change,
     "WHILE":        _while,
@@ -359,20 +351,20 @@ if __name__ == "__main__":
         ["MAKE",     "INTEGER",   "THEINTI",       "1065"],
         ["MAKE",     "INTEGER",   "THROWONE",      "1065"],
         ["MAKE",     "INTEGER",   "THROWTWO",      "1065"],
-        ["NEW",      "LIST",      "LISTOFTWO",     "2"],
+        ["MAKE",     "LIST",      "LISTOFTWO",     "2"],
         ["SET",      "INDEX",     "LISTOFTWO",     "0"],
         ["WRITE",    "INTEGER",   "LISTOFTWO",     "THEINT"],
         ["SET",      "INDEX",     "LISTOFTWO",     "1"],
         ["WRITE",    "INTEGER",   "LISTOFTWO",     "THEINTI"],
         ["MAKE",     "INTEGER",   "ZERO",          "0"],
-        ["ADD",      "TEMPORARY", "THEINT",        "THEINTI"],  # DEST=TEMPORARY (3-word compat)
+        ["ADD",      "TEMPORARY", "THEINT",        "THEINTI"],
         ["PRINT",    "INTEGER",   "TEMPORARY",     "BREAK"],
         ["FUNCTION", "LIST",      "GREATESTDIV",   "LIST"],
         ["SET",      "INDEX",     "LISTOFTWO",     "0"],
         ["GET",      "INTEGER",   "LISTOFTWO",     "THROWONE"],
         ["SET",      "INDEX",     "LISTOFTWO",     "1"],
         ["GET",      "INTEGER",   "LISTOFTWO",     "THROWTWO"],
-        ["NEW",      "CONDITION", "EUCLIDCOMPARE", "EQUALS"],
+        ["MAKE",     "CONDITION", "EUCLIDCOMPARE", "EQUALS"],
         ["SET",      "LEFT",      "EUCLIDCOMPARE", "THROWTWO"],
         ["SET",      "RIGHT",     "EUCLIDCOMPARE", "ZERO"],
         ["IF",       "CONDITION", "EUCLIDCOMPARE", "23"],

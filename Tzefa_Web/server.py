@@ -2,17 +2,17 @@
 Tzefa OCR - Self-hosted Web Interface
 Runs the full Tzefa pipeline and displays intermediate results with toggle views.
 """
-import sys
-import os
-import io
 import base64
+import io
+import os
+import sys
 import traceback
 from pathlib import Path
 
 import cv2
 import numpy as np
+from flask import Flask, redirect, render_template, request, url_for
 from PIL import Image
-from flask import Flask, render_template, request, redirect, url_for
 
 # --- Add project paths ---
 current_web_dir = Path(__file__).resolve().parent          # Tzefa_Web/
@@ -24,8 +24,8 @@ if str(project_root) not in sys.path:
 if str(ocr_dir) not in sys.path:
     sys.path.insert(0, str(ocr_dir))
 
+from Tzefa_Language.dialects import CAPS_ONLY, FOUR_WORD, MIXED_CASE, THREE_WORD
 from Tzefa_Ocr.main import image_to_code_pipeline
-from Tzefa_Language.dialects import THREE_WORD, FOUR_WORD, CAPS_ONLY, MIXED_CASE
 
 app = Flask(__name__)
 app.config["UPLOAD_FOLDER"] = str(current_web_dir / "uploads")
@@ -105,9 +105,10 @@ def process():
     if file.filename == "":
         return redirect(url_for("index"))
 
-    # Read dialect / casing toggles from the form
+    # Read dialect / casing / segmentation toggles from the form
     dialect = _DIALECT_MAP.get(request.form.get("dialect", "three_word"), THREE_WORD)
     casing = _CASING_MAP.get(request.form.get("casing", "caps_only"), CAPS_ONLY)
+    segmentation_method = request.form.get("segmentation_method", "yolo")
 
     try:
         # Read image directly from upload into numpy
@@ -119,7 +120,9 @@ def process():
         img_rgb = cv2.cvtColor(img_bgr, cv2.COLOR_BGR2RGB)
 
         # Run pipeline with the selected dialect/casing
-        pipeline = image_to_code_pipeline(img_rgb, dialect=dialect, casing=casing)
+        pipeline = image_to_code_pipeline(
+            img_rgb, dialect=dialect, casing=casing, segmentation_method=segmentation_method
+        )
 
         # Build display data
         display = {

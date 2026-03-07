@@ -3,7 +3,7 @@
 
 
 **Tzefa** is an end-to-end system that photographs handwritten code on a whiteboard, recognizes it via a custom OCR pipeline, compiles it through a custom programming language, and executes it — all from a single image upload in a self-hosted web UI.
-
+Its goal is to be a prototype for a joint dsl/ocr system that complement eachother
 ---
 
 ## Pipeline
@@ -20,7 +20,7 @@ Image Upload (Flask web UI)
     └─ Stage 7: Execution ─────────── Subprocess with 15s timeout, captures stdout
 ```
 
-All three DL models (Binarization, Line Segmentation, Word OCR) are custom trained. No stock/pretrained models in the inference path.
+All three DL models (Binarization, Line Segmentation, Word OCR) are custom trained.
 
 ---
 
@@ -114,8 +114,8 @@ Every instruction is exactly 3 tokens: `COMMAND ARG1 ARG2`
 Examples:
 ```
 MAKEINTEGER NUMY FIVE       -- create integer NUMY with value 5
-MULTIPLY RESULT BIGLY       -- RESULT = RESULT * BIGLY
-SUBTRACT NUMY ONE           -- NUMY = NUMY - ONE
+MULTIPLY RESULT BIGLY       -- TEMPORARY = RESULT * BIGLY
+SUBTRACT NUMY ONE           -- TEMPORARY = NUMY - ONE
 WHILETRUE JUSTBIGGER FOURTEEN  -- while JUSTBIGGER is true, loop until line 14
 PRINTINTEGER TEMPORARY BREAK   -- print TEMPORARY with newline
 ```

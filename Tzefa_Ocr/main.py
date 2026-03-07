@@ -1,22 +1,24 @@
-import sys
 import gc
-import traceback
-import subprocess
-import torch
-import numpy as np
-from pathlib import Path
-from PIL import Image
 import importlib
+import subprocess
+import sys
+import traceback
+from pathlib import Path
+
+import numpy as np
+import torch
+from PIL import Image
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import Binarization
 import image_preprocessing
 import Line_Segmentation
-import Binarization
 import OCR
-from Tzefa_Language.ErrorCorrection import TzefaParser
-from Tzefa_Language.dialects import THREE_WORD, CAPS_ONLY
+
 from Tzefa_Language import topy
+from Tzefa_Language.dialects import CAPS_ONLY, THREE_WORD
+from Tzefa_Language.ErrorCorrection import TzefaParser
 
 
 def clear_vram(model_ref=None):
@@ -64,6 +66,7 @@ def image_to_code_pipeline(
     img_array,
     dialect: str = THREE_WORD,
     casing: str = CAPS_ONLY,
+    segmentation_method: str = "yolo",
 ):
     """
     Run the full Tzefa OCR pipeline and return a dict of intermediate results.
@@ -76,6 +79,8 @@ def image_to_code_pipeline(
         ``THREE_WORD`` or ``FOUR_WORD``.
     casing : str
         ``CAPS_ONLY`` or ``MIXED_CASE``.
+    segmentation_method : str
+        ``yolo`` or ``eynollah``.
     """
     result = {
         "binarized_img": None,
@@ -110,8 +115,8 @@ def image_to_code_pipeline(
 
     # --- STAGE 2: DL Line Segmentation ---
     try:
-        print("Loading Line Segmentation Model to GPU...")
-        truelines = Line_Segmentation.segment_lines(binarified_img_array)
+        print(f"Loading Line Segmentation Model ({segmentation_method}) to GPU...")
+        truelines = Line_Segmentation.segment_lines(binarified_img_array, method=segmentation_method)
         print("Flushing Line Segmentation Model from VRAM...")
         clear_vram()
         result["truelines"] = truelines
@@ -200,11 +205,13 @@ def image_to_code_pipeline(
 
             # Normalise to canonical 4-word CAPS tuple
             normalised = parser.normalize_source_line(raw_tokens)
-            corrected_lines.append(" ".join(normalised))
 
             # Parse and error-correct into validated 4-word bytecode
             bytecode = parser.parse_line(normalised)
             bytecode_list.append(bytecode)
+
+            # Show the corrected (post-error-correction) form
+            corrected_lines.append(" ".join(bytecode))
 
         result["corrected_lines"] = corrected_lines
         result["stage"] = "error_correction"
