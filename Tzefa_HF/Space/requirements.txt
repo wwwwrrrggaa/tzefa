@@ -2,7 +2,6 @@ torch
 torchvision
 transformers
 segmentation-models-pytorch
-albumentations
 ultralytics
 timm
 opencv-python-headless
@@ -11,4 +10,9 @@ numpy
 gradio
 huggingface_hub
 fast_edit_distance
-
+pydantic
+einops
+safetensors
+surya-ocr
+sentencepiece
+protobuf

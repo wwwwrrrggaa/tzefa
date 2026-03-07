@@ -1,10 +1,12 @@
 """
 Tzefa - Complete Pipeline Demo Space
-Image -> Binarization -> Line Segmentation -> Word Segmentation -> OCR ->
-Error Correction -> Compilation -> Execution
+Image → Binarization → Line Segmentation → Word Segmentation → OCR →
+Error Correction → Compilation → Execution
 
-All models loaded from their HF repos. Modular: swap weights and this updates.
-Language files (ErrorCorrection, topy, createdpython, Number2Name) are bundled in language/
+Supports:
+  - Dialect toggle: 3-word (classic) / 4-word (verbose)
+  - Line segmentation toggle: YOLO (trained model) / Surya (general detector)
+  - Binarization model toggle: mit_b3 / mit_b5
 """
 import os
 import gc
@@ -12,6 +14,7 @@ import sys
 import subprocess
 import importlib
 import traceback
+
 import cv2
 import torch
 import numpy as np
@@ -24,31 +27,34 @@ import torch.nn.functional as F
 from transformers import TrOCRProcessor, VisionEncoderDecoderModel
 from ultralytics import YOLO
 
-# Add language/ to path so ErrorCorrection can import Number2Name etc.
 SPACE_DIR = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, SPACE_DIR)
 
-from language import ErrorCorrection, topy
+from language.dialects import THREE_WORD, FOUR_WORD, CAPS_ONLY, MIXED_CASE
+from language.ErrorCorrection import TzefaParser
+from language import topy
 
 # ══════════════════════════════════════════════════════════════
 # CONFIG
 # ══════════════════════════════════════════════════════════════
 HF_TOKEN = os.environ.get("HF_TOKEN")
-DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+DEVICE   = "cuda" if torch.cuda.is_available() else "cpu"
 
-BIN_B3_REPO = "WARAJA/Model"
-BIN_B3_FILE = "b3_model.pth"
-BIN_B5_REPO = "WARAJA/b5_model"
-BIN_B5_FILE = "b5_model.pth"
-YOLO_REPO   = "WARAJA/Tzefa-Line-Segmentation-YOLO"
-YOLO_FILE   = "best.pt"
-TROCR_REPO  = "WARAJA/Tzefa-Word-OCR-TrOCR"
+BIN_B3_REPO     = "WARAJA/Model"
+BIN_B3_FILE     = "b3_model.pth"
+BIN_B5_REPO     = "WARAJA/b5_model"
+BIN_B5_FILE     = "b5_model.pth"
+YOLO_REPO       = "WARAJA/Tzefa-Line-Segmentation-YOLO"
+YOLO_FILE       = "best.pt"
+TROCR_REPO      = "WARAJA/Tzefa-Word-OCR-TrOCR"
 TROCR_BASE_PROC = "microsoft/trocr-small-stage1"
 
-TILE_SIZE = 640
-YOLO_IMGSZ = 640
-TARGET_WORDS = 3
+TILE_SIZE        = 640
+YOLO_IMGSZ       = 640
 MAX_DILATE_ITERS = 200
+
+_DIALECT_MAP = {"4-word (verbose)": FOUR_WORD, "3-word (classic)": THREE_WORD}
+_CASING_MAP  = {"CAPS only": CAPS_ONLY, "Mixed case": MIXED_CASE}
 
 
 # ══════════════════════════════════════════════════════════════
@@ -72,9 +78,9 @@ class HighResMAnet(nn.Module):
         )
 
     def forward(self, x):
-        hr = self.high_res_stem(x)
+        hr   = self.high_res_stem(x)
         feat = self.base_model.encoder(x)
-        dec = self.base_model.decoder(feat)
+        dec  = self.base_model.decoder(feat)
         return self.final_fusion(torch.cat([dec, hr], dim=1))
 
 
@@ -94,15 +100,16 @@ def _load_bin_models():
 
 
 def _preprocess_tile(pil_img):
-    arr = np.array(pil_img).astype(np.float32) / 255.0
-    mean, std = np.array([0.485, 0.456, 0.406]), np.array([0.229, 0.224, 0.225])
+    arr  = np.array(pil_img).astype(np.float32) / 255.0
+    mean = np.array([0.485, 0.456, 0.406])
+    std  = np.array([0.229, 0.224, 0.225])
     return torch.from_numpy(((arr - mean) / std).transpose(2, 0, 1))
 
 
 def binarize(pil_img, model):
     orig_w, orig_h = pil_img.size
-    pad_w = (TILE_SIZE - orig_w % TILE_SIZE) % TILE_SIZE
-    pad_h = (TILE_SIZE - orig_h % TILE_SIZE) % TILE_SIZE
+    pad_w  = (TILE_SIZE - orig_w % TILE_SIZE) % TILE_SIZE
+    pad_h  = (TILE_SIZE - orig_h % TILE_SIZE) % TILE_SIZE
     padded = Image.new("RGB", (orig_w + pad_w, orig_h + pad_h), (255, 255, 255))
     padded.paste(pil_img, (0, 0))
     nw, nh = padded.size
@@ -128,10 +135,10 @@ def _load_yolo():
     return YOLO(path)
 
 
-def segment_lines(bin_arr, yolo_model):
-    img_rgb = cv2.cvtColor(bin_arr, cv2.COLOR_GRAY2RGB) if len(bin_arr.shape) == 2 else bin_arr
+def segment_lines_yolo(bin_arr, yolo_model):
+    img_rgb  = cv2.cvtColor(bin_arr, cv2.COLOR_GRAY2RGB) if len(bin_arr.shape) == 2 else bin_arr
     orig_h, orig_w = img_rgb.shape[:2]
-    results = yolo_model.predict(img_rgb, imgsz=YOLO_IMGSZ, conf=0.2, iou=0.2, verbose=False)
+    results  = yolo_model.predict(img_rgb, imgsz=YOLO_IMGSZ, conf=0.2, iou=0.2, verbose=False)
     truelines = []
     if len(results) > 0 and results[0].obb is not None:
         obbs = sorted(results[0].obb.xyxyxyxy.cpu().numpy(), key=lambda p: np.min(p[:, 1]))
@@ -141,10 +148,58 @@ def segment_lines(bin_arr, yolo_model):
             pad = (rx1 - rx0) * 0.12
             x0 = int(np.clip(rx0 - pad, 0, orig_w))
             x1 = int(np.clip(rx1 + pad, 0, orig_w))
-            y0, y1 = int(np.clip(ry0, 0, orig_h)), int(np.clip(ry1, 0, orig_h))
+            y0 = int(np.clip(ry0, 0, orig_h))
+            y1 = int(np.clip(ry1, 0, orig_h))
             if x1 - x0 > 0 and y1 - y0 > 0:
                 truelines.append((x0, y0, x1 - x0, y1 - y0))
     return truelines
+
+
+_surya_predictor = None
+
+def segment_lines_surya(bin_arr):
+    global _surya_predictor
+    os.environ.setdefault("DETECTOR_TEXT_THRESHOLD", "0.75")
+    os.environ.setdefault("DETECTOR_BLANK_THRESHOLD", "0.45")
+    try:
+        from surya.detection import DetectionPredictor
+    except ImportError:
+        raise RuntimeError("surya-ocr not installed. Add 'surya-ocr' to requirements.txt.")
+    if _surya_predictor is None:
+        _surya_predictor = DetectionPredictor()
+    img_rgb   = cv2.cvtColor(bin_arr, cv2.COLOR_GRAY2RGB) if len(bin_arr.shape) == 2 else bin_arr
+    pil_image = Image.fromarray(img_rgb)
+    predictions = _surya_predictor([pil_image])
+
+    CONF_THRESHOLD = 0.6
+    raw = []
+    if predictions and predictions[0].bboxes:
+        for bbox in predictions[0].bboxes:
+            conf = getattr(bbox, "confidence", 1.0)
+            if conf < CONF_THRESHOLD:
+                continue
+            x1, y1, x2, y2 = bbox.bbox
+            if (x2 - x1) > 5 and (y2 - y1) > 5:
+                raw.append([float(x1), float(y1), float(x2), float(y2)])
+
+    raw.sort(key=lambda b: (b[1] + b[3]) / 2)
+
+    def overlaps_v(a, b):
+        return a[1] < b[3] and b[1] < a[3]
+
+    merged = []
+    for box in raw:
+        placed = False
+        for m in merged:
+            if overlaps_v(m, box):
+                m[0] = min(m[0], box[0]); m[1] = min(m[1], box[1])
+                m[2] = max(m[2], box[2]); m[3] = max(m[3], box[3])
+                placed = True; break
+        if not placed:
+            merged.append(list(box))
+
+    merged.sort(key=lambda b: b[1])
+    return [(int(b[0]), int(b[1]), int(b[2]-b[0]), int(b[3]-b[1])) for b in merged]
 
 
 # ══════════════════════════════════════════════════════════════
@@ -152,12 +207,13 @@ def segment_lines(bin_arr, yolo_model):
 # ══════════════════════════════════════════════════════════════
 def _get_word_boxes(dilated, min_w, min_h):
     contours, _ = cv2.findContours(dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-    boxes = sorted([b for b in [cv2.boundingRect(c) for c in contours] if b[2] >= min_w and b[3] >= min_h],
-                   key=lambda b: b[0])
-    return boxes
+    return sorted(
+        [b for b in [cv2.boundingRect(c) for c in contours] if b[2] >= min_w and b[3] >= min_h],
+        key=lambda b: b[0],
+    )
 
 
-def segment_words(bin_arr, lines):
+def segment_words(bin_arr, lines, target_words):
     words_dict = {}
     for i, (lx, ly, lw, lh) in enumerate(lines):
         ih, iw = bin_arr.shape[:2]
@@ -165,36 +221,36 @@ def segment_words(bin_arr, lines):
         lh, lw = min(lh, ih - ly), min(lw, iw - lx)
         if lw <= 0 or lh <= 0:
             continue
-        crop = bin_arr[ly:ly+lh, lx:lx+lw]
-        inv = cv2.bitwise_not(crop)
-        min_ww, min_wh = max(5, int(lw * 0.02)), max(5, int(lh * 0.25))
+        crop   = bin_arr[ly:ly+lh, lx:lx+lw]
+        inv    = cv2.bitwise_not(crop)
+        min_ww = max(5, int(lw * 0.02))
+        min_wh = max(5, int(lh * 0.25))
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 3))
         dilated, prev, found = inv.copy(), None, False
         for _ in range(MAX_DILATE_ITERS):
             dilated = cv2.dilate(dilated, kernel, iterations=1)
-            boxes = _get_word_boxes(dilated, min_ww, min_wh)
-            if len(boxes) == TARGET_WORDS:
+            boxes   = _get_word_boxes(dilated, min_ww, min_wh)
+            if len(boxes) == target_words:
                 prev = boxes; found = True; break
-            elif len(boxes) < TARGET_WORDS:
+            elif len(boxes) < target_words:
                 break
             else:
                 prev = boxes
-        if not found and prev and len(prev) > TARGET_WORDS:
-            while len(prev) > TARGET_WORDS:
+        if not found and prev and len(prev) > target_words:
+            while len(prev) > target_words:
                 gaps = [(prev[j+1][0] - (prev[j][0]+prev[j][2]), j) for j in range(len(prev)-1)]
                 _, mi = min(gaps)
                 b1, b2 = prev[mi], prev[mi+1]
-                merged = (min(b1[0],b2[0]), min(b1[1],b2[1]),
-                          max(b1[0]+b1[2],b2[0]+b2[2])-min(b1[0],b2[0]),
-                          max(b1[1]+b1[3],b2[1]+b2[3])-min(b1[1],b2[1]))
+                merged = (
+                    min(b1[0],b2[0]), min(b1[1],b2[1]),
+                    max(b1[0]+b1[2],b2[0]+b2[2])-min(b1[0],b2[0]),
+                    max(b1[1]+b1[3],b2[1]+b2[3])-min(b1[1],b2[1]),
+                )
                 prev = list(prev); prev[mi] = merged; prev.pop(mi+1)
             found = True
-        if not found or not prev or len(prev) != TARGET_WORDS:
+        if not found or not prev or len(prev) != target_words:
             continue
-        line_words = {}
-        for wi, (wx, wy, ww, wh) in enumerate(prev):
-            line_words[wi+1] = (wx, wx+ww)
-        words_dict[i+1] = line_words
+        words_dict[i+1] = {wi+1: (wx, wx+ww) for wi, (wx, wy, ww, wh) in enumerate(prev)}
     return words_dict
 
 
@@ -202,7 +258,7 @@ def segment_words(bin_arr, lines):
 # 4. OCR
 # ══════════════════════════════════════════════════════════════
 def _load_trocr():
-    proc = TrOCRProcessor.from_pretrained(TROCR_BASE_PROC, use_fast=False)
+    proc  = TrOCRProcessor.from_pretrained(TROCR_BASE_PROC, use_fast=False)
     model = VisionEncoderDecoderModel.from_pretrained(TROCR_REPO, token=HF_TOKEN).to(DEVICE).eval()
     return proc, model
 
@@ -211,10 +267,10 @@ def _pad_aspect(img, max_ratio=4.0):
     w, h = img.size
     if w <= max_ratio * h:
         return img
-    th = int(w / max_ratio)
+    th  = int(w / max_ratio)
     pad = th - h
     from PIL import ImageOps
-    return ImageOps.expand(img, (0, pad//2, 0, pad - pad//2), fill=(255,255,255))
+    return ImageOps.expand(img, (0, pad//2, 0, pad - pad//2), fill=(255, 255, 255))
 
 
 def ocr_word(img_pil, proc, model):
@@ -224,13 +280,13 @@ def ocr_word(img_pil, proc, model):
     pv = proc(img_pil, return_tensors="pt").pixel_values.to(DEVICE)
     with torch.no_grad():
         ids = model.generate(pv)
-    txt = proc.batch_decode(ids, skip_special_tokens=True)[0]
+    txt   = proc.batch_decode(ids, skip_special_tokens=True)[0]
     parts = txt.split()
     return max(parts, key=len) if parts else txt
 
 
 # ══════════════════════════════════════════════════════════════
-# 5. VISUALIZATION
+# 5. VISUALISATION
 # ══════════════════════════════════════════════════════════════
 def draw_line_bboxes(img_arr, bboxes):
     vis = cv2.cvtColor(img_arr, cv2.COLOR_GRAY2RGB) if len(img_arr.shape) == 2 else img_arr.copy()
@@ -241,8 +297,8 @@ def draw_line_bboxes(img_arr, bboxes):
 
 
 def draw_word_bboxes(img_arr, word_tuples):
-    vis = cv2.cvtColor(img_arr, cv2.COLOR_GRAY2RGB) if len(img_arr.shape) == 2 else img_arr.copy()
-    colors = [(50, 220, 50), (50, 180, 255), (255, 180, 50)]
+    vis    = cv2.cvtColor(img_arr, cv2.COLOR_GRAY2RGB) if len(img_arr.shape) == 2 else img_arr.copy()
+    colors = [(50, 220, 50), (50, 180, 255), (255, 180, 50), (220, 50, 220)]
     for lt in word_tuples:
         for wi, (text, (x1, y1, x2, y2)) in enumerate(lt):
             c = colors[wi % len(colors)]
@@ -252,7 +308,7 @@ def draw_word_bboxes(img_arr, word_tuples):
 
 
 # ══════════════════════════════════════════════════════════════
-# 6. CLEAR VRAM
+# 6. UTILITIES
 # ══════════════════════════════════════════════════════════════
 def clear_vram():
     gc.collect()
@@ -260,9 +316,6 @@ def clear_vram():
         torch.cuda.empty_cache()
 
 
-# ══════════════════════════════════════════════════════════════
-# 7. CODE EXECUTION
-# ══════════════════════════════════════════════════════════════
 def execute_code(compiled_code):
     try:
         result = subprocess.run(
@@ -283,10 +336,9 @@ def execute_code(compiled_code):
 
 
 # ══════════════════════════════════════════════════════════════
-# 8. FULL PIPELINE
+# 7. FULL PIPELINE
 # ══════════════════════════════════════════════════════════════
-def run_full_pipeline(input_image, bin_model_choice):
-    """Returns: binarized, line_vis, word_vis, raw_ocr, corrected, compiled, execution, status"""
+def run_full_pipeline(input_image, bin_model_choice, dialect_choice, casing_choice, seg_method):
     if input_image is None:
         return None, None, None, "", "", "", "", "No image provided."
 
@@ -295,19 +347,21 @@ def run_full_pipeline(input_image, bin_model_choice):
     else:
         pil_img = input_image.convert("RGB")
 
-    status = []
+    dialect = _DIALECT_MAP.get(dialect_choice, FOUR_WORD)
+    casing  = _CASING_MAP.get(casing_choice, CAPS_ONLY)
+    status  = []
 
-    # Reset language global state between runs
-    importlib.reload(ErrorCorrection)
+    # Fresh language state for every run
     importlib.reload(topy)
+    parser       = TzefaParser(dialect=dialect, casing=casing)
+    target_words = parser.expected_words_per_line
 
     # ── Stage 1: Binarization ──
     try:
         status.append("[1/6] Binarization...")
         bin_models = _load_bin_models()
-        model = bin_models[bin_model_choice]
-        bin_pil = binarize(pil_img, model)
-        bin_arr = np.array(bin_pil)
+        bin_pil    = binarize(pil_img, bin_models[bin_model_choice])
+        bin_arr    = np.array(bin_pil)
         del bin_models; clear_vram()
         status.append("  OK")
     except Exception as e:
@@ -315,19 +369,22 @@ def run_full_pipeline(input_image, bin_model_choice):
 
     # ── Stage 2: Line Segmentation ──
     try:
-        status.append("[2/6] Line Segmentation...")
-        yolo_model = _load_yolo()
-        truelines = segment_lines(bin_arr, yolo_model)
-        del yolo_model; clear_vram()
-        status.append(f"  Found {len(truelines)} lines")
+        status.append(f"[2/6] Line Segmentation ({seg_method})...")
+        if seg_method == "Surya":
+            truelines = segment_lines_surya(bin_arr)
+        else:
+            yolo_model = _load_yolo()
+            truelines  = segment_lines_yolo(bin_arr, yolo_model)
+            del yolo_model; clear_vram()
+        status.append(f"  OK  {len(truelines)} lines")
         line_vis = draw_line_bboxes(bin_arr, truelines)
     except Exception as e:
-        return bin_arr, None, None, "", "", "", "", f"Line Seg failed: {e}"
+        return bin_arr, None, None, "", "", "", "", f"Line Seg failed: {e}\n{traceback.format_exc()}"
 
     # ── Stage 3: Word Seg + OCR ──
     try:
         status.append("[3/6] Word Segmentation + OCR...")
-        words = segment_words(bin_arr, truelines)
+        words             = segment_words(bin_arr, truelines, target_words)
         proc, trocr_model = _load_trocr()
         all_line_tuples, raw_lines = [], []
         for ln in sorted(words.keys()):
@@ -337,142 +394,41 @@ def run_full_pipeline(input_image, bin_model_choice):
             line_tuples = []
             for wn in sorted(words[ln].keys()):
                 wx1, wx2 = words[ln][wn]
-                ax1, ax2 = max(0, int(lx + wx1)), min(bin_arr.shape[1], int(lx + wx2))
-                ay1, ay2 = max(0, ly - 20), min(bin_arr.shape[0], ly + lh + 20)
-                crop_pil = Image.fromarray(bin_arr[ay1:ay2, ax1:ax2])
-                text = ocr_word(crop_pil, proc, trocr_model)
+                ax1 = max(0, int(lx + wx1))
+                ax2 = min(bin_arr.shape[1], int(lx + wx2))
+                ay1 = max(0, ly - 20)
+                ay2 = min(bin_arr.shape[0], ly + lh + 20)
+                text = ocr_word(Image.fromarray(bin_arr[ay1:ay2, ax1:ax2]), proc, trocr_model)
                 line_tuples.append((text, (ax1, ay1, ax2, ay2)))
             raw_lines.append(" ".join(t[0] for t in line_tuples))
             all_line_tuples.append(line_tuples)
         del proc, trocr_model; clear_vram()
         word_vis = draw_word_bboxes(bin_arr, all_line_tuples)
         raw_text = "\n".join(raw_lines)
-        status.append(f"  {len(raw_lines)} lines recognized")
+        status.append(f"  OK  {len(raw_lines)} lines recognised")
     except Exception as e:
-        return bin_arr, line_vis, None, "", "", "", "", f"OCR failed: {e}"
+        return bin_arr, line_vis, None, "", "", "", "", f"OCR failed: {e}\n{traceback.format_exc()}"
 
     # ── Stage 4: Error Correction ──
     try:
         status.append("[4/6] Error Correction...")
-        ErrorCorrection.sendlines(len(truelines))
-        index_list, corrected_lines = [], []
+        parser.init_indent_table(len(truelines))
+        corrected_lines, bytecode_list = [], []
         for line_entries in all_line_tuples:
             if not line_entries:
-                corrected_lines.append(""); index_list.append(0); continue
-            raw_tokens = [t[0].upper() for t in line_entries]
-            while len(raw_tokens) < 3:
+                corrected_lines.append("")
+                bytecode_list.append(["MAKE", "INTEGER", "TEMPORARY", "0"])
+                continue
+            raw_tokens = [t[0] for t in line_entries]
+            while len(raw_tokens) < target_words:
                 raw_tokens.append("")
-            raw_tokens = raw_tokens[:3]
-            cleaned_first, index, _ = ErrorCorrection.handelfirstword(raw_tokens[0])
-            index_list.append(index)
-            simpler = ErrorCorrection.listsimplefunc[index]
-            if simpler[1] == 0:
-                bucket_idx = simpler[2]
-                if isinstance(bucket_idx, int) and bucket_idx < len(ErrorCorrection.listall):
-                    bucket = ErrorCorrection.listall[bucket_idx]
-                    if raw_tokens[1] and raw_tokens[1] not in bucket:
-                        bucket.append(raw_tokens[1])
-            corrected_lines.append(f"{cleaned_first} {raw_tokens[1]} {raw_tokens[2]}")
+            raw_tokens  = raw_tokens[:target_words]
+            normalised  = parser.normalize_source_line(raw_tokens)
+            bytecode    = parser.parse_line(normalised)
+            bytecode_list.append(bytecode)
+            corrected_lines.append(" ".join(bytecode))   # post-correction output
         corrected_text = "\n".join(corrected_lines)
         status.append("  OK")
     except Exception as e:
-        return bin_arr, line_vis, word_vis, raw_text, "", "", "", f"Error Correction failed: {e}\n{traceback.format_exc()}"
-
-    # ── Stage 5: Compilation ──
-    try:
-        status.append("[5/6] Compilation...")
-        linelist = []
-        for i in range(len(corrected_lines)):
-            idx = index_list[i] if i < len(index_list) else 0
-            line_obj = ErrorCorrection.toline(corrected_lines[i], idx, ErrorCorrection.giveindents())
-            linelist.append(line_obj)
-        listfunctions_out, listezfunctions_out = ErrorCorrection.giveinstructions()
-        topy.getinstructions(listfunctions_out, listezfunctions_out)
-        compiled = ["from language.createdpython import *"]
-        counterindent = 0
-        for i in range(1, len(linelist) + 1):
-            counterindent += topy.listofindentchanges[i]
-            compiled.append("    " * counterindent + topy.makepredict(linelist[i - 1], i))
-        compiled.append("printvars()")
-        compiled_code = "\n".join(compiled)
-        status.append("  OK")
-    except Exception as e:
-        return bin_arr, line_vis, word_vis, raw_text, corrected_text, "", "", f"Compilation failed: {e}\n{traceback.format_exc()}"
-
-    # ── Stage 6: Execution ──
-    try:
-        status.append("[6/6] Execution...")
-        exec_output = execute_code(compiled_code)
-        status.append("  Done!")
-    except Exception as e:
-        exec_output = f"Execution error: {e}"
-
-    return bin_arr, line_vis, word_vis, raw_text, corrected_text, compiled_code, exec_output, "\n".join(status)
-
-
-# ══════════════════════════════════════════════════════════════
-# 9. GRADIO UI
-# ══════════════════════════════════════════════════════════════
-with gr.Blocks(title="Tzefa - Handwritten Code to Execution", theme=gr.themes.Soft()) as demo:
-    gr.Markdown(
-        "# Tzefa - Handwritten Code to Execution\n"
-        "Upload a photo of handwritten Tzefa code. The pipeline runs binarization, "
-        "line detection, word OCR, error correction, compilation, and execution."
-    )
-
-    with gr.Row():
-        with gr.Column(scale=1):
-            input_image = gr.Image(type="pil", label="Upload Image")
-            bin_choice = gr.Dropdown(
-                choices=["mit_b3 (Standard)", "mit_b5 (HighRes)"],
-                value="mit_b5 (HighRes)",
-                label="Binarization Model",
-            )
-            run_btn = gr.Button("Run Full Pipeline", variant="primary", size="lg")
-        with gr.Column(scale=1):
-            status_box = gr.Textbox(label="Pipeline Status", lines=12, interactive=False)
-
-    with gr.Tabs():
-        with gr.Tab("Binarized"):
-            bin_out = gr.Image(label="Binarized Image")
-        with gr.Tab("Line Detection"):
-            line_out = gr.Image(label="Line Bounding Boxes")
-        with gr.Tab("Word Detection + OCR"):
-            word_out = gr.Image(label="Word Bboxes with OCR Labels")
-        with gr.Tab("Raw OCR"):
-            raw_out = gr.Textbox(label="Raw OCR (before correction)", lines=15, interactive=False)
-        with gr.Tab("Error Corrected"):
-            corrected_out = gr.Textbox(label="After Error Correction", lines=15, interactive=False)
-        with gr.Tab("Compiled Python"):
-            compiled_out = gr.Code(language="python", label="Generated Python Code")
-        with gr.Tab("Execution Output"):
-            exec_out = gr.Textbox(label="Program Output", lines=10, interactive=False)
-
-    run_btn.click(
-        fn=run_full_pipeline,
-        inputs=[input_image, bin_choice],
-        outputs=[bin_out, line_out, word_out, raw_out, corrected_out, compiled_out, exec_out, status_box],
-    )
-
-    gr.Examples(
-        examples=[["demo.png", "mit_b5 (HighRes)"]],
-        inputs=[input_image, bin_choice],
-        label="Example Images",
-    )
-
-    gr.Markdown(
-        "### Resources\n"
-        "| Component | Link |\n"
-        "|-----------|------|\n"
-        "| Binarization Demo | [WARAJA/Tzefa-Binarization](https://huggingface.co/spaces/WARAJA/Tzefa-Binarization) |\n"
-        "| b5 Model | [WARAJA/b5_model](https://huggingface.co/WARAJA/b5_model) |\n"
-        "| YOLO Model | [WARAJA/Tzefa-Line-Segmentation-YOLO](https://huggingface.co/WARAJA/Tzefa-Line-Segmentation-YOLO) |\n"
-        "| TrOCR Model | [WARAJA/Tzefa-Word-OCR-TrOCR](https://huggingface.co/WARAJA/Tzefa-Word-OCR-TrOCR) |\n"
-        "| Binarization Dataset | [WARAJA/Tzefa-Binarization-Dataset](https://huggingface.co/datasets/WARAJA/Tzefa-Binarization-Dataset) |\n"
-        "| Line Seg Dataset | [WARAJA/Tzefa-Line-Segmentation-Dataset](https://huggingface.co/datasets/WARAJA/Tzefa-Line-Segmentation-Dataset) |\n"
-        "| Word OCR Dataset | [WARAJA/Tzefa-Word-OCR-Dataset](https://huggingface.co/datasets/WARAJA/Tzefa-Word-OCR-Dataset) |"
-    )
-
-if __name__ == "__main__":
-    demo.queue().launch()
-
+        return bin_arr, line_vis, word_vis, raw_text, "", "", "", \
+               f"Error Correction failed: {e}\n{traceback.format_exc()}"
