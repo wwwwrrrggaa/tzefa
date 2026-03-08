@@ -76,15 +76,19 @@ Each view is toggled via buttons. If the pipeline crashes at any stage, all prio
 - ✅ Full 7-stage pipeline runs end-to-end from image to execution
 - ✅ Binarization model performs well (HighResMAnet mit_b5)
 - ✅ Word OCR model performs well (fine-tuned TrOCR)
-- ✅ Error correction corrects all 3 tokens per line (command + arg1 + arg2)
+- ✅ Error correction with edit-distance matching against full vocabulary
+- ✅ Dual-dialect support: **3-word** (classic) and **4-word** (verbose) compile to same bytecode
+- ✅ Casing modes: **CAPS_ONLY** and **MIXED_CASE** (title-cased commands, lowercase vars)
 - ✅ Compilation and execution with subprocess isolation
-- ✅ Web UI with full toggle views for debugging every stage
-- ✅ Word segmentation via repeated dilation enforces exactly 3 words per line
+- ✅ Web UI with full toggle views for debugging every stage + dialect/casing toggles
+- ✅ Type system with functions, loops, conditions, lists, arithmetic
+- ✅ PEP 8 compliance, type hints throughout, clean function/variable names
+- ✅ Comprehensive documentation: `SYNTAX_GUIDE.md`, `ARCHITECTURE.md`, `COMPARISON.md`
 
 ### Needs Work
 - ⚠️ **Line Segmentation model** is the weakest link — detection accuracy requires X-axis padding compensation due to 640×640 squash. Needs more training data and/or architectural improvements.
-- ⚠️ **ErrorCorrection + topy global state** requires `importlib.reload()` between runs
-- ⚠️ **createdpython.py** has 3 error-handler call-site bugs (wrong arg counts)
+- ⚠️ **Dialect/casing toggle** in web UI not yet wired to backend (`server.py` needs POST parameter handling)
+- ⚠️ **Word segmentation** currently enforces 3 words per line; should adapt to dialect choice
 
 ---
 
@@ -109,15 +113,31 @@ python Tzefa_Web/server.py
 
 ## Tzefa Language
 
-Every instruction is exactly 3 tokens: `COMMAND ARG1 ARG2`
+Tzefa is a **typed, stack-based language** designed for handwritten OCR recognition. Source code supports **two dialects** that compile to the same **4-word bytecode**:
 
-Examples:
+### **3-Word Dialect (Classic)** – `OPCODE ARG1 ARG2`
 ```
-MAKEINTEGER NUMY FIVE       -- create integer NUMY with value 5
-MULTIPLY RESULT BIGLY       -- TEMPORARY = RESULT * BIGLY
-SUBTRACT NUMY ONE           -- TEMPORARY = NUMY - ONE
-WHILETRUE JUSTBIGGER FOURTEEN  -- while JUSTBIGGER is true, loop until line 14
-PRINTINTEGER TEMPORARY BREAK   -- print TEMPORARY with newline
+MAKEINTEGER COUNTER FIVE       -- create integer COUNTER with value 5
+ADDVALUES COUNTER ONE          -- TEMPORARY = COUNTER + 1
+ASSSIGNINT COUNTER TEMPORARY   -- COUNTER = TEMPORARY
+PRINTINTEGER COUNTER BREAK     -- print COUNTER with newline
 ```
 
-Numbers are written as words (ZERO through ONEHUNDRED) to maximize OCR error correction coverage. The compiler (`topy.py`) generates Python code that runs on the Tzefa VM (`createdpython.py`).
+### **4-Word Dialect (Verbose)** – `VERB TYPE ARG1 ARG2`
+```
+MAKE INTEGER COUNTER FIVE      -- create integer COUNTER with value 5
+ADD RESULT COUNTER ONE         -- RESULT = COUNTER + 1
+SET INTEGER COUNTER RESULT     -- COUNTER = RESULT
+PRINT INTEGER COUNTER BREAK    -- print COUNTER with newline
+```
+
+**Key features:**
+- Numbers written as English words (`ZERO` through `ONEHUNDRED`) for OCR reliability
+- Full type system: `INTEGER`, `STRING`, `BOOLEAN`, `LIST`
+- Functions with single input/output via `LOCALINT`, `LOCALSTR`, `LOCALLIST`
+- Loop constructs: `WHILE`, `ITERATE` with end-line markers
+- Conditions: `NEW CONDITION` with `EQUALS`, `BIGEQUALS`, `BIGGER` operators
+- List operations: fixed-size typed containers with index-based access
+- Two casing modes: `CAPS_ONLY` (all uppercase) and `MIXED_CASE` (commands title-cased, vars lowercase)
+
+The compiler (`topy.py`) transpiles to Python code executed by the Tzefa VM (`createdpython.py`). See `SYNTAX_GUIDE.md` and `ARCHITECTURE.md` for complete documentation.

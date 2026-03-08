@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Tuple
 from Tzefa_Language import Number2Name
 from Tzefa_Language.dialects import (
     THREE_WORD, CAPS_ONLY,
-    normalize_line, words_per_line, ALU_VERBS,
+     normalize_line, words_per_line, ALU_VERBS,
 )
 from Tzefa_Language import topy
 from fast_edit_distance import edit_distance
