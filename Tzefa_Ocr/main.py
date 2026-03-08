@@ -149,7 +149,7 @@ def image_to_code_pipeline(
 
             for word_number in sorted_word_keys:
                 word_x1, word_x2 = words[line_number][word_number]
-
+                ### bug if out of bounds and also i dont get it
                 abs_x1 = line_x + word_x1
                 abs_x2 = line_x + word_x2
                 abs_y1 = line_y - 20
@@ -187,6 +187,7 @@ def image_to_code_pipeline(
 
     # --- STAGE 4: Error Correction + Compilation ---
     try:
+        #if its a class go all the way,give the text list and return the corrected code,why do we need to init the indent table and go line by line
         parser.init_indent_table(len(truelines))
         corrected_lines = []
         bytecode_list = []
@@ -198,6 +199,7 @@ def image_to_code_pipeline(
                 continue
 
             # Extract raw OCR tokens and pad/trim to expected word count
+            # I also dont get this
             raw_tokens = [t[0] for t in line_entries]
             while len(raw_tokens) < target_words:
                 raw_tokens.append("")
@@ -220,6 +222,8 @@ def image_to_code_pipeline(
         return result
 
     # --- STAGE 5: Compilation to Python ---
+    # again, why do we need to go line by line here, why cant we just compile the whole thing at once, also why do we need to init the indent table in the parser
+    # make it also a class that gets input and gives output[cant believe im saying this when i always preferred functional programming but this code is just a mess ngl]
     try:
         compiled_lines = ["from Tzefa_Language.createdpython import *"]
         indent_level = 0

@@ -25,6 +25,9 @@ The YOLO-OBB line segmentation model is the primary bottleneck. The current work
 **Recommended improvements:**
 - [ ] **Train on more data** — more handwritten Tzefa images with line-level annotations
 - [ ] **Evaluate letterboxing** — train with aspect-ratio-preserving letterbox instead of squash, so detection widths are accurate without padding hacks
+- [ ] **Statistical improvements** — statistical improvements like finding the best Levenshtein distance weights based on large artificial dataset of words
+- [ ] **Model architecture** — refractor the compiler and error correction into classed to remove global state and unneeded logic in main
+- [ ] **Train Word-Level OCR** — current word-level OCR is capital only, add support for lowercase also standardize the dataset and consider switching model. Important to support more resolution for better accuracy.
 
 
 

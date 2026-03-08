@@ -80,7 +80,7 @@ def draw_word_bboxes_on_image(img_array: np.ndarray, bboxes, word_bboxes) -> np.
     if word_bboxes is None:
         return vis
 
-    colors = [(50, 220, 50), (50, 180, 255), (255, 180, 50), (220, 50, 220)]  # green / blue / orange per word slot
+    colors = [(50, 220, 50), (50, 180, 255), (255, 180, 50), (220, 50, 220)]
     for line_tuples in word_bboxes:
         for w_idx, (text, (x1, y1, x2, y2)) in enumerate(line_tuples):
             color = colors[w_idx % len(colors)]

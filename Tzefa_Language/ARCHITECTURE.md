@@ -1,4 +1,4 @@
-# Tzefa Language – Internal Architecture
+ # Tzefa Language – Internal Architecture
 
 This document describes how Tzefa source text is compiled and executed.
 
